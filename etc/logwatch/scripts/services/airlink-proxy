@@ -79,6 +79,7 @@ while(defined($_ = <STDIN>)) {
              /pidfile *:/ ||
              /log_to_stdout *:/ ||
              /Starting .* daemon:/ ||
+             /Stopping .* daemon:/ ||
              /debug *:/) {
         # ignore
     } else {
