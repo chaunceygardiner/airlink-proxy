@@ -390,7 +390,7 @@ class Service(object):
                 r.raise_for_status()
                 elapsed_time = time.time() - start_time
                 log.debug('collect_data: elapsed time: %f seconds.' % elapsed_time)
-                if elapsed_time > 1.0:
+                if elapsed_time > 1.5:
                     log.info('Event took longer than expected: %f seconds.' % elapsed_time)
                 break
             except requests.exceptions.ConnectionError as e:
