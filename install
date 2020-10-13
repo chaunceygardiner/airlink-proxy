@@ -64,7 +64,7 @@ echo "log-to-stdout = 0" >> ${target_dir}/airlinkproxy.conf
 echo "service-name = airlink-proxy" >> ${target_dir}/airlinkproxy.conf
 echo "hostname = $sensor" >> ${target_dir}/airlinkproxy.conf
 echo "port = 80" >> ${target_dir}/airlinkproxy.conf
-echo "timeout-secs = 3" >> ${target_dir}/airlinkproxy.conf
+echo "timeout-secs = 2" >> ${target_dir}/airlinkproxy.conf
 echo "server-port = 8000" >> ${target_dir}/airlinkproxy.conf
 echo "database-file = ${target_dir}/archive/airlinkproxy.sdb" >> ${target_dir}/airlinkproxy.conf
 
