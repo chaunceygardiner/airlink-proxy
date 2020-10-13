@@ -10,8 +10,6 @@ airlink-proxy works in the backround querying the AirLink sensor and answers que
 * using a URL and response identical to the actual AirLink device.
 * The proxy can handle a higher load, even when running on a Raspberry Pi.
 * The proxy will archive the AirLiink's 1m readings (at 5s past the minute).
-* Developed with WeeWX weather software in mind. Use with the
-  [weewx-airlink](https://github.com/chaunceygardiner/weewx-airlink) plugin.
 
 ### Rest API
 * `/v1/current_conditions` Identical to quering the device directly.  Returns the latest response on record.

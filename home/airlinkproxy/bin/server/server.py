@@ -4,16 +4,14 @@
 # See the file LICENSE for your full rights.
 
 import http.server
-import socketserver
-import syslog
 import threading
 
 import monitor.monitor
 
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from json import dumps
-from typing import Any, Dict, IO, Iterator, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 VERSION = '1'
 
@@ -37,7 +35,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
     """Handle requests in a separate thread."""
     def do_GET(self):
         request =  Handler.parse_requestline(self.requestline)
-        json = ''
         if request.request_type == RequestType.GET_VERSION:
             self.respond_success(dumps({'version': VERSION}))
         elif request.request_type == RequestType.GET_EARLIEST_TIMESTAMP:
@@ -106,19 +103,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if 'since_ts' in args_dict:
                     try:
                         since_ts = int(args_dict['since_ts'])
-                    except Exception as e:
+                    except Exception:
                         request_type = RequestType.ERROR
                         error =  "The since_ts argument must be an integer, found: '%s'." % args_dict['since_ts']
                     if 'max_ts' in args_dict:
                         try:
                             max_ts = int(args_dict['max_ts'])
-                        except Exception as e:
+                        except Exception:
                             request_type = RequestType.ERROR
                             error =  "The max_ts argument must be an integer, found: '%s'." % args_dict['max_ts']
                     if 'limit' in args_dict:
                         try:
                             limit = int(args_dict['limit'])
-                        except Exception as e:
+                        except Exception:
                             request_type = RequestType.ERROR
                             error =  "The limit argument must be an integer, found: '%s'." % args_dict['limit']
                 else:

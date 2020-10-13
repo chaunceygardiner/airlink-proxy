@@ -8,7 +8,6 @@ Read from airlink sensor every 5 seconds and write current reading.
 At 5s past the minute, write an archive reading.
 """
 
-import copy
 import optparse
 import os
 import requests
@@ -24,7 +23,6 @@ import server.server
 import configobj
 
 from datetime import datetime
-from datetime import timedelta
 from dateutil import tz
 from dateutil.parser import parse
 from enum import Enum
@@ -32,9 +30,9 @@ from json import dumps
 from time import sleep
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
-AIRLINK_PROXY_VERSION = "1.0"
+AIRLINK_PROXY_VERSION = "0.1"
 
 class Logger(object):
     def __init__(self, service_name: str, log_to_stdout: bool=False, debug_mode: bool=False):
@@ -377,7 +375,7 @@ class Service(object):
         log.debug('Service created')
 
     @staticmethod
-    def collect_data(session: requests.Session, hostname: str, port:int, timeout_secs:int) -> Dict[str, Any]:
+    def collect_data(session: requests.Session, hostname: str, port:int, timeout_secs:int) -> Optional[Reading]:
     
         j = None
         url = 'http://%s:%s/v1/current_conditions' % (hostname, port)
@@ -536,7 +534,7 @@ class Service(object):
             data_structure_type       = record['data_structure_type'],
             temp                      = record['temp'],
             hum                       = record['hum'],
-            dew_point                 = record['hum'],
+            dew_point                 = record['dew_point'],
             wet_bulb                  = record['wet_bulb'],
             heat_index                = record['heat_index'],
             pm_1_last                 = record['pm_1_last'],
@@ -565,10 +563,11 @@ class Service(object):
 
     @staticmethod
     def convert_to_json(reading: Reading) -> str:
-        reading_dict: Dict[str, Any] = {
+        data: Dict[str, Any] = {
             'did'                      : reading.did,
             'name'                     : reading.name,
-            'ts'                       : reading.ts,
+            'ts'                       : reading.ts}
+        condition_0: Dict[str, Any] = {
             'lsid'                     : reading.lsid,
             'data_structure_type'      : reading.data_structure_type,
             'temp'                     : reading.temp,
@@ -595,6 +594,8 @@ class Service(object):
             'pct_pm_data_last_3_hours' : reading.pct_pm_data_last_3_hours,
             'pct_pm_data_nowcast'      : reading.pct_pm_data_nowcast,
             'pct_pm_data_last_24_hours': reading.pct_pm_data_last_24_hours}
+        data['conditions'] = [ condition_0 ]
+        reading_dict: Dict[str, Any] = { 'data': data, 'error': None }
 
         return dumps(reading_dict)
 
@@ -715,7 +716,7 @@ class Service(object):
                 if session is None:
                     session= requests.Session()
 
-                reading: Reading = Service.collect_data(session, self.hostname, self.port, self.timeout_secs)
+                reading: Optional[Reading] = Service.collect_data(session, self.hostname, self.port, self.timeout_secs)
                 log.debug('Read sensor in %d seconds.' % (Service.utc_now() - start).seconds)
             except Exception as e:
                 log.error('Skipping reading because of: %s' % e)
@@ -769,13 +770,13 @@ def print_failed(e: Exception) -> None:
     print(bcolors.FAIL + 'FAILED' + bcolors.ENDC)
     print(traceback.format_exc())
 
-def collect_two_readings_one_second_apart(hostname: str, port: int, timeout_secs:int) -> Tuple[Reading, Reading]:
+def collect_two_readings_one_second_apart(hostname: str, port: int, timeout_secs:int) -> Tuple[Optional[Reading], Optional[Reading]]:
     try:
         session: requests.Session = requests.Session()
         print('collect_two_readings_one_seconds_apart...', end='')
-        reading1: Reading = Service.collect_data(session, hostname, port, timeout_secs)
+        reading1: Optional[Reading] = Service.collect_data(session, hostname, port, timeout_secs)
         sleep(1) # to get a different time (to the second) on reading2
-        reading2: Reading = Service.collect_data(session, hostname, port, timeout_secs)
+        reading2: Optional[Reading] = Service.collect_data(session, hostname, port, timeout_secs)
         print_passed()
         return reading1, reading2
     except Exception as e:
@@ -789,12 +790,13 @@ def run_tests(service_name: str, hostname: str, port: int, timeout_secs: int) ->
     sanity_check_reading(reading)
     test_convert_to_json(reading, reading2)
 
-def sanity_check_reading(reading: Reading) -> None:
+def sanity_check_reading(reading: Optional[Reading]) -> None:
     try:
         print('sanity_check_reading....', end='')
-        now: int = time.time()
-        one_minute_ago: int = time.time() - 60
+        now: float = int(time.time())
+        one_minute_ago: int = int(time.time() - 60)
 
+        assert reading is not None
         assert reading.did is not None
         assert reading.name is not None
         assert reading.ts > one_minute_ago and reading.ts < now, 'Reading returned insane time (%r).' % reading.ts
@@ -813,12 +815,12 @@ def create_test_reading(dt: datetime) -> Reading:
     return Reading(
         did                       = 'abc',
         name                      = 'foo',
-        ts                        = datetime.timestamp(dt),
+        ts                        = int(datetime.timestamp(dt)),
         lsid                      = 123,
         data_structure_type       = 6,
         temp                      = 100,
         hum                       = 90,
-        dew_point                 = 90,
+        dew_point                 = 85,
         wet_bulb                  = 66,
         heat_index                = 99,
         pm_1_last                 = 1,
@@ -835,8 +837,8 @@ def create_test_reading(dt: datetime) -> Reading:
         pm_10_last_3_hours        = 10.3,
         pm_10_last_24_hours       = 10.24,
         pm_10_nowcast             = 10.1010,
-        last_report_time          = datetime.timestamp(dt),
-        pct_pm_data_last_1_hour   = 99,
+        last_report_time          = int(datetime.timestamp(dt)),
+        pct_pm_data_last_1_hour   = 94,
         pct_pm_data_last_3_hours  = 97,
         pct_pm_data_nowcast       = 100,
         pct_pm_data_last_24_hours = 76)
@@ -844,9 +846,10 @@ def create_test_reading(dt: datetime) -> Reading:
 def float_eq(v1: float, v2: float) -> bool:
     return abs(v1 - v2) < 0.0001
 
-def test_db_archive_records(service_name: str, reading_in: Reading) -> None:
+def test_db_archive_records(service_name: str, reading_in: Optional[Reading]) -> None:
     try:
         print('test_db_archive_records....', end='')
+        assert reading_in is not None
         tmp_db = tempfile.NamedTemporaryFile(
             prefix='tmp-test-db-archive-%s.sdb' % service_name, delete=False)
         tmp_db.close()
@@ -868,7 +871,7 @@ def test_db_archive_records(service_name: str, reading_in: Reading) -> None:
     finally:
         os.unlink(tmp_db.name)
 
-def test_db_current_records(service_name: str, reading_in_1: Reading, reading_in_2: Reading) -> None:
+def test_db_current_records(service_name: str, reading_in_1: Optional[Reading], reading_in_2: Optional[Reading]) -> None:
     try:
         print('test_db_current_records....', end='')
         tmp_db = tempfile.NamedTemporaryFile(
@@ -893,10 +896,12 @@ def test_db_current_records(service_name: str, reading_in_1: Reading, reading_in
     finally:
         os.unlink(tmp_db.name)
 
-def test_convert_to_json(reading1: Reading, reading2: Reading) -> None:
+def test_convert_to_json(reading1: Optional[Reading], reading2: Optional[Reading]) -> None:
     try:
         print('test_convert_to_json....', end='')
 
+        assert reading1 is not None
+        assert reading2 is not None
         Service.convert_to_json(reading1)
         Service.convert_to_json(reading2)
 
@@ -904,7 +909,7 @@ def test_convert_to_json(reading1: Reading, reading2: Reading) -> None:
         reading = create_test_reading(parse('2019/12/15T03:43:05UTC', tzinfos=tzinfos))
         json_reading: str = Service.convert_to_json(reading)
 
-        expected = '{"did": "abc", "name": "foo", "ts": 1576381385.0, "lsid": 123, "data_structure_type": 6, "temp": 100, "hum": 90, "dew_point": 90, "wet_bulb": 66, "heat_index": 99, "pm_1_last": 1, "pm_2p5_last": 3, "pm_10_last": 10, "pm_1": 1.1, "pm_2p5": 2.5, "pm_2p5_last_1_hour": 2.1, "pm_2p5_last_3_hours": 2.3, "pm_2p5_last_24_hours": 2.24, "pm_2p5_nowcast": 2.22, "pm_10": 10.0, "pm_10_last_1_hour": 10.1, "pm_10_last_3_hours": 10.3, "pm_10_last_24_hours": 10.24, "pm_10_nowcast": 10.101, "last_report_time": 1576381385.0, "pct_pm_data_last_1_hour": 99, "pct_pm_data_last_3_hours": 97, "pct_pm_data_nowcast": 100, "pct_pm_data_last_24_hours": 76}'
+        expected = '{"data": {"did": "abc", "name": "foo", "ts": 1576381385, "conditions": [{"lsid": 123, "data_structure_type": 6, "temp": 100, "hum": 90, "dew_point": 85, "wet_bulb": 66, "heat_index": 99, "pm_1_last": 1, "pm_2p5_last": 3, "pm_10_last": 10, "pm_1": 1.1, "pm_2p5": 2.5, "pm_2p5_last_1_hour": 2.1, "pm_2p5_last_3_hours": 2.3, "pm_2p5_last_24_hours": 2.24, "pm_2p5_nowcast": 2.22, "pm_10": 10.0, "pm_10_last_1_hour": 10.1, "pm_10_last_3_hours": 10.3, "pm_10_last_24_hours": 10.24, "pm_10_nowcast": 10.101, "last_report_time": 1576381385, "pct_pm_data_last_1_hour": 94, "pct_pm_data_last_3_hours": 97, "pct_pm_data_nowcast": 100, "pct_pm_data_last_24_hours": 76}]}, "error": null}'
 
         assert json_reading == expected, 'Expected json: %s, found: %s' % (expected, json_reading)
         print_passed()
