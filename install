@@ -1,0 +1,82 @@
+#!/bin/sh
+
+# Copyright (c) 2020 John A Kline
+# See the file LICENSE for your full rights.
+
+# For testing, set etc to /tmp/etc
+etc="/etc"
+#etc="/tmp/etc"
+
+if [ "$etc" = "/tmp/etc" ]; then
+  # This is a test run.  Create the /etc directories needed.
+  mkdir -p /tmp/etc/init.d 2>/dev/null
+  mkdir    /tmp/etc/logrotate.d 2>/dev/null
+  mkdir    /tmp/etc/rsyslog.d 2>/dev/null
+  mkdir -p /tmp/etc/logwatch/conf/services 2>/dev/null
+  mkdir    /tmp/etc/logwatch/conf/logfiles 2>/dev/null
+  mkdir -p /tmp/etc/logwatch/scripts/services 2>/dev/null
+fi
+
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <src-files> <target-dir> <airlink-dns-name-or-ip>"
+  exit 1
+fi
+
+src_dir="$1"
+target_dir="$2"
+sensor="$3"
+
+mkdir -p "$target_dir"/archive 2> /dev/null
+mkdir -p "$target_dir"/bin/monitor 2> /dev/null
+mkdir    "$target_dir"/bin/server 2> /dev/null
+
+if [ -d "/etc/logrotate.d" ]; then
+  cp ${src_dir}/etc/logrotate.d/airlink-proxy ${etc}/logrotate.d/
+fi
+
+if [ -d "/etc/logwatch" ]; then
+  cp ${src_dir}/etc/logwatch/conf/services/airlink-proxy.conf ${etc}/logwatch/conf/services/
+  cp ${src_dir}/etc/logwatch/conf/logfiles/airlink-proxy.conf ${etc}/logwatch/conf/logfiles/
+  cp ${src_dir}/etc/logwatch/scripts/services/airlink-proxy ${etc}/logwatch/scripts/services/
+fi
+
+if [ -d "/etc/rsyslog.d" ]; then
+  cp ${src_dir}/etc/rsyslog.d/airlink-proxy.conf ${etc}/rsyslog.d/
+fi
+
+# cp and fixup /etc/init.d/airlink-proxy
+cat ${src_dir}/etc/init.d/airlink-proxy | sed "s%/home/airlinkproxy%$target_dir%g" > /${etc}/init.d/airlink-proxy
+
+# cp bin files
+cp ${src_dir}/home/airlinkproxy/bin/server/__init__.py ${target_dir}/bin/server/
+cp ${src_dir}/home/airlinkproxy/bin/server/server.py ${target_dir}/bin/server/
+cp ${src_dir}/home/airlinkproxy/bin/airlinkproxyd ${target_dir}/bin/
+cp ${src_dir}/home/airlinkproxy/bin/monitor/__init__.py ${target_dir}/bin/monitor/
+cp ${src_dir}/home/airlinkproxy/bin/monitor/monitor.py ${target_dir}/bin/monitor/
+
+# copy and fix up the wrapper
+cat ${src_dir}/home/airlinkproxy/bin/airlinkproxy-wrapper.sh | sed "s%/home/airlinkproxy%$target_dir%g" > ${target_dir}/bin/airlinkproxy-wrapper.sh
+chmod +x ${target_dir}/bin/airlinkproxy-wrapper.sh
+
+echo "# AirlinkProxy configuration file" > ${target_dir}/airlinkproxy.conf
+echo "debug = 0" >> ${target_dir}/airlinkproxy.conf
+echo "log-to-stdout = 0" >> ${target_dir}/airlinkproxy.conf
+echo "service-name = airlink-proxy" >> ${target_dir}/airlinkproxy.conf
+echo "hostname = $sensor" >> ${target_dir}/airlinkproxy.conf
+echo "port = 80" >> ${target_dir}/airlinkproxy.conf
+echo "timeout-secs = 3" >> ${target_dir}/airlinkproxy.conf
+echo "server-port = 8000" >> ${target_dir}/airlinkproxy.conf
+echo "database-file = ${target_dir}/archive/airlinkproxy.sdb" >> ${target_dir}/airlinkproxy.conf
+
+# If for real...
+if [ "$etc" = "/etc" ]; then
+    if [ -d "/etc/rsyslog.d" ]; then
+        service rsyslog restart
+    fi
+    if [ -d "/etc/logrotate.d" ]; then
+        service logrotate restart
+    fi
+    chmod +x /etc/init.d/airlink-proxy
+    systemctl enable airlink-proxy
+    /etc/init.d/airlink-proxy start
+fi

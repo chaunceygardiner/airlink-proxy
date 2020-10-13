@@ -1,0 +1,60 @@
+#! /bin/sh
+
+# Copyright (c) 2020 John A Kline
+# See the file LICENSE for your full rights.
+
+### BEGIN INIT INFO
+# Provides:          airlink-proxy
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Should-Start:      $syslog $network $named $time
+# Should-Stop:       $syslog $network $named $time
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Controls airlink-proxy
+# Description:       airlink-proxy maintains AirLink device readings averages over a period of time
+### END INIT INFO
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+DAEMON=/home/airlinkproxy/bin/airlinkproxy-wrapper.sh
+NAME="airlink-proxy"
+DESC="airlink-proxy daemon"
+PIDFILE=/run/airlink-proxy.pid
+
+[ -x "$DAEMON" ] || exit 0
+
+. /lib/lsb/init-functions
+
+case "$1" in
+    start)
+        if $0 status > /dev/null ; then
+            log_success_msg "$NAME is already running"
+        else
+            log_daemon_msg "Starting $DESC" "$NAME"
+            start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- --pidfile $PIDFILE
+            log_end_msg $?
+        fi
+        ;;
+
+    stop)
+        log_daemon_msg "Stopping $DESC" "$NAME"
+        start-stop-daemon --stop --quiet --oknodo --pidfile $PIDFILE --remove-pidfile --exec /usr/bin/python3
+        log_end_msg $?
+        ;;
+
+    restart|force-reload)
+        $0 stop
+        $0 start
+        ;;
+
+    status)
+        status_of_proc -p $PIDFILE "$DAEMON" "$NAME" && exit 0 || exit $?
+        ;;
+
+    *)
+        log_action_msg "Usage: /etc/init.d/airlink-proxy {start|stop|restart|force-reload|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,20 @@
+#!/usr/bin/python3
+
+# Copyright (c) 2020 John A Kline
+# See the file LICENSE for your full rights.
+
+"""main airlinkproxy server program
+"""
+
+import monitor.monitor
+import sys
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, IO, Iterator, List, Optional, Tuple
+
+AIRLINK_PROXY_SERVICE_VERSION = "0.1"
+
+if __name__ == "__main__":
+    def main():
+        monitor.monitor.start(sys.argv)
+    main()

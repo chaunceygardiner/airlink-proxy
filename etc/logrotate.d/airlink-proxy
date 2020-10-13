@@ -1,0 +1,15 @@
+# Copyright (c) 2020 John A Kline
+# See the file LICENSE for your full rights.
+
+/var/log/airlink-proxy.log {
+  weekly
+  missingok
+  rotate 52
+  compress
+  delaycompress
+  notifempty
+
+# on some older systems the permissions do not propagate, so force them
+# debian uses root:adm
+create 644 root adm
+}
