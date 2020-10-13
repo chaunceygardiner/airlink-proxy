@@ -30,7 +30,7 @@ these instructions and the install script serve as a specification
 for what steps are needed to install.
 
 ```
-sudo <airlink-proxy-src-dir>/install <airlink-proxy-src-dir> <target-dir> <airlink-dns-name-or-ip-address>"
+sudo <airlink-proxy-src-dir>/install <airlink-proxy-src-dir> <target-dir> <airlink-dns-name-or-ip-address>
 ```
 
 ### Example installation commands:
