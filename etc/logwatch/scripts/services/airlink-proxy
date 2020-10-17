@@ -19,6 +19,7 @@ my $CURRENT_INSERT_ERRORS = 'Current Insert Errors';
 my $TMP_NAME_RESOLUTON_ERRORS = 'Tmp Name Resolution Errors';
 my $NO_ROUTE_TO_HOST_ERRORS = 'No Route to Host';
 my $SKIPPED_ARCHIVE_RECORDS = 'Skipped archive records';
+my $CONNECTION_TIMEOUT = 'Connection timed out';
 my $CONNECTION_REFUSED = 'Connection refused';
 my $NAME_UNKNOWN = 'Name or service not known';
 
@@ -63,6 +64,8 @@ while(defined($_ = <STDIN>)) {
         $errors{$SKIPPED_ARCHIVE_RECORDS} += 1;
     } elsif (/Connection refused.*Retrying request/) {
         $errors{$CONNECTION_REFUSED} += 1;
+    } elsif (/Connection to .* timed out/) {
+        $errors{$CONNECTION_TIMEOUT} += 1;
     } elsif (/Failed to establish a new connection: .* Name or service not known/) {
         $errors{$NAME_UNKNOWN} += 1;
     } elsif (/host:port *:/ ||
