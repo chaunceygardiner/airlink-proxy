@@ -711,12 +711,13 @@ class Service(object):
             sleep(secs_to_event)
 
             # Write a reading and possibly write an archive record.
+            reading: Optional[Reading] = None
             try:
                 start = Service.utc_now()
                 if session is None:
                     session= requests.Session()
 
-                reading: Optional[Reading] = Service.collect_data(session, self.hostname, self.port, self.timeout_secs)
+                reading = Service.collect_data(session, self.hostname, self.port, self.timeout_secs)
                 log.debug('Read sensor in %d seconds.' % (Service.utc_now() - start).seconds)
             except Exception as e:
                 log.error('Skipping reading because of: %s' % e)
