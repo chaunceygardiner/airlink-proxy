@@ -60,7 +60,7 @@ while(defined($_ = <STDIN>)) {
         $errors{$TMP_NAME_RESOLUTON_ERRORS} += 1;
     } elsif (/Failed to establish a new connection: .* No route to host/) {
         $errors{$NO_ROUTE_TO_HOST_ERRORS} += 1;
-    } elsif (/Skipping archive record because there have been zero readings this archive period/) {
+    } elsif (/Skipping archive record/) {
         $errors{$SKIPPED_ARCHIVE_RECORDS} += 1;
     } elsif (/Connection refused.*Retrying request/) {
         $errors{$CONNECTION_REFUSED} += 1;
