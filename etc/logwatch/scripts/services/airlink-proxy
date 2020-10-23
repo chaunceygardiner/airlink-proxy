@@ -15,6 +15,7 @@ my $LONG_SENSOR_READS = 'Long Sensor Reads';
 my $ARCHIVE_RECORDS_ADDED = 'Archive Records Added';
 my $SKIPPED_SENSOR_READINGS = 'Skipped Sensor Readings';
 my $INSANE_SENSOR_READINGS = 'Insane Sensor Readings';
+my $OLD_SENSOR_READINGS = 'Old (Insane?) Sensor Readings';
 my $ARCHIVE_INSERT_ERRORS = 'Archive Insert Errors';
 my $CURRENT_INSERT_ERRORS = 'Current Insert Errors';
 my $TMP_NAME_RESOLUTON_ERRORS = 'Tmp Name Resolution Errors';
@@ -31,11 +32,13 @@ my @unmatched = ();
 my @current_insert_errors = ();
 my @archive_insert_errors = ();
 my @insane_readings = ();
+my @old_readings = ();
 
 my %itemized = (
     'Archive Insert Errors', \@archive_insert_errors,
     'Current Insert Errors', \@current_insert_errors,
     'Insane Readings', \@insane_readings,
+    'Old (Insane?) Readings', \@old_readings,
     );
 
 my %summaries = (
@@ -62,6 +65,9 @@ while(defined($_ = <STDIN>)) {
     } elsif (/Reading not sane:/) {
         push @insane_readings, $_;
         $errors{$INSANE_SENSOR_READINGS} += 1;
+    } elsif (/Ignoring reading from .*: .* seconds/) {
+        push @old_readings, $_;
+        $errors{$OLD_SENSOR_READINGS} += 1;
     } elsif (/Failed to establish a new connection: .* Temporary failure in name resolution/) {
         $errors{$TMP_NAME_RESOLUTON_ERRORS} += 1;
     } elsif (/Failed to establish a new connection: .* No route to host/) {
