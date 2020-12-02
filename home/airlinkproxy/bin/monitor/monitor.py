@@ -390,7 +390,7 @@ class Service(object):
                 r.raise_for_status()
                 elapsed_time = time.time() - start_time
                 log.debug('collect_data: elapsed time: %f seconds.' % elapsed_time)
-                if elapsed_time > 1.5:
+                if elapsed_time > 2:
                     log.info('Event took longer than expected: %f seconds.' % elapsed_time)
                 break
             except requests.exceptions.ConnectionError as e:
@@ -979,7 +979,7 @@ def start(args):
     hostname       : Optional[str]  = config_dict.get('hostname', None)
     port           : int            = int(config_dict.get('port', 80))
     server_port    : int            = int(config_dict.get('server-port', 8000))
-    timeout_secs   : int            = int(config_dict.get('timeout-secs', 15))
+    timeout_secs   : int            = int(config_dict.get('timeout-secs', 3))
     pollfreq_secs  : int            = int(config_dict.get('poll-freq-secs', 5))
     pollfreq_offset: int            = int(config_dict.get('poll-freq-offset', 5))
     arcint_secs    : int            = int(config_dict.get('archive-interval-secs', 60))
