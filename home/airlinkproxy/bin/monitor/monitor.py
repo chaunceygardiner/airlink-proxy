@@ -168,7 +168,7 @@ class Database(object):
             ' pct_pm_data_last_24_hours INTEGER,'
             ' PRIMARY KEY (record_type, timestamp));')
 
-        with sqlite3.connect(db_file, timeout=5) as conn:
+        with sqlite3.connect(db_file, timeout=10) as conn:
             cursor = conn.cursor()
             cursor.execute(create_reading_table)
             cursor.close()
@@ -263,7 +263,7 @@ class Database(object):
 
     def save_reading(self, record_type: int, timestamp: int, r: Reading) -> None:
         insert_reading_sql = Database.build_insert_statement(record_type, timestamp, r)
-        with sqlite3.connect(self.db_file, timeout=5) as conn:
+        with sqlite3.connect(self.db_file, timeout=10) as conn:
             cursor = conn.cursor()
             # if a current record, delete previous current.
             if record_type == RecordType.CURRENT:
@@ -285,7 +285,7 @@ class Database(object):
             ' ORDER BY timestamp LIMIT 1') % RecordType.ARCHIVE
         log.debug('get-earliest-timestamp: select: %s' % select)
         resp = {}
-        with sqlite3.connect(self.db_file, timeout=5) as conn:
+        with sqlite3.connect(self.db_file, timeout=10) as conn:
             cursor = conn.cursor()
             for row in cursor.execute(select):
                 log.debug('get-earliest-timestamp: returned %s' % row[0])
@@ -322,7 +322,7 @@ class Database(object):
             select = '%s LIMIT %d' % (select, limit)
         select += ';'
         log.debug('fetch_readings: select: %s' % select)
-        with sqlite3.connect(self.db_file, timeout=5) as conn:
+        with sqlite3.connect(self.db_file, timeout=10) as conn:
             cursor = conn.cursor()
             for row in cursor.execute(select):
                 reading = Database.create_reading_from_row(row)
