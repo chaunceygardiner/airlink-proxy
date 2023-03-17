@@ -4,6 +4,7 @@
 # See the file LICENSE for your full rights.
 
 import http.server
+import socket
 import threading
 
 import monitor.monitor
@@ -132,7 +133,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 db_file: Optional[str] = None
 
 def start_server(port: int):
-    with http.server.ThreadingHTTPServer(('', port), Handler) as server:
+    class ThreadingHTTPServer6(http.server.ThreadingHTTPServer):
+        address_family = socket.AF_INET6
+    with ThreadingHTTPServer6(('::', port), Handler) as server:
         server.serve_forever()
 
 def serve_requests(port: int, db_file_in: str):

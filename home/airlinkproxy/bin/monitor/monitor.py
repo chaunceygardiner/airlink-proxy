@@ -263,7 +263,7 @@ class Database(object):
 
     def save_reading(self, record_type: int, timestamp: int, r: Reading) -> None:
         insert_reading_sql = Database.build_insert_statement(record_type, timestamp, r)
-        with sqlite3.connect(self.db_file, timeout=10) as conn:
+        with sqlite3.connect(self.db_file, timeout=15) as conn:
             cursor = conn.cursor()
             # if a current record, delete previous current.
             if record_type == RecordType.CURRENT:
@@ -390,7 +390,7 @@ class Service(object):
                 r.raise_for_status()
                 elapsed_time = time.time() - start_time
                 log.debug('collect_data: elapsed time: %f seconds.' % elapsed_time)
-                if elapsed_time > 2:
+                if elapsed_time > 5:
                     log.info('Event took longer than expected: %f seconds.' % elapsed_time)
                 break
             except requests.exceptions.ConnectionError as e:
