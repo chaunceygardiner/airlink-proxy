@@ -1,7 +1,7 @@
 # airlink-proxy
 
 [![Read the manual](assets/btn-manual.svg)](https://chaunceygardiner.github.io/airlink-proxy/)
-[![Download airlink-proxy.zip](assets/btn-download.svg)](https://github.com/chaunceygardiner/airlink-proxy/archive/refs/heads/master.zip)
+[![Download airlink-proxy.zip](assets/btn-download.svg)](https://github.com/chaunceygardiner/airlink-proxy/releases/latest/download/airlink-proxy.zip)
 [![Report an issue](assets/btn-issue.svg)](https://github.com/chaunceygardiner/airlink-proxy/issues)
 
 A proxy and archiver for the [Davis AirLink](https://www.davisinstruments.com/) air
@@ -75,7 +75,7 @@ git clone https://github.com/chaunceygardiner/airlink-proxy
 ```
 
 or download and unzip
-[the current source](https://github.com/chaunceygardiner/airlink-proxy/archive/refs/heads/master.zip),
+[the latest release](https://github.com/chaunceygardiner/airlink-proxy/releases/latest/download/airlink-proxy.zip),
 which unpacks to `airlink-proxy-master`.  Then:
 
 ```sh

@@ -27,7 +27,7 @@ git clone https://github.com/chaunceygardiner/airlink-proxy
 ```
 
 or download and unzip
-[the current source](https://github.com/chaunceygardiner/airlink-proxy/archive/refs/heads/master.zip),
+[the latest release](https://github.com/chaunceygardiner/airlink-proxy/releases/latest/download/airlink-proxy.zip),
 which unpacks to `airlink-proxy-master`.
 
 ## 2. Install the packages

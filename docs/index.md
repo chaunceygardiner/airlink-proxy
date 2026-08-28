@@ -8,7 +8,7 @@ permalink: /
 # airlink-proxy — one poller in front of the AirLink
 
 [View on GitHub](https://github.com/chaunceygardiner/airlink-proxy){: .btn .btn-primary }
-[Download the source](https://github.com/chaunceygardiner/airlink-proxy/archive/refs/heads/master.zip){: .btn }
+[Download the source](https://github.com/chaunceygardiner/airlink-proxy/releases/latest/download/airlink-proxy.zip){: .btn }
 [Report an issue](https://github.com/chaunceygardiner/airlink-proxy/issues){: .btn }
 
 airlink-proxy is a small daemon that sits between a
