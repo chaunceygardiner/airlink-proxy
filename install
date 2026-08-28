@@ -1,82 +1,590 @@
 #!/bin/sh
 
-# Copyright (c) 2020 John A Kline
+# Copyright (c) 2020-2026 John A Kline
 # See the file LICENSE for your full rights.
+#
+# Install or upgrade airlink-proxy.  Every setting can be given as a command
+# line option; on a fresh install, any setting not given is prompted for
+# (with a default), or -y accepts the default for everything not specified.
+# See usage (-h) for the full list of options.
+#
+# Conf files are NEVER overwritten once installed (users may customize
+# them): the rsyslog, logrotate and logwatch conf files are installed only
+# if absent; when the shipped version differs from the installed one, it is
+# written alongside as <file>.dpkg-new so it can be merged by hand.
+# airlinkproxy.conf is the exception: an upgrade (an
+# existing airlinkproxy.conf is found) never prompts and migrates it —
+# existing values are kept (command line options win), options new to the
+# version are added with their defaults, and deprecated options are
+# dropped.  Program files and the logwatch classifier script are refreshed
+# on every install (the classifier matches the daemon's log messages, so it
+# ships with the daemon); any of them that is a symlink is left in place.
+# A pre-1.0 SysV (init.d) installation is migrated to the systemd unit.
+#
+# Uninstall (leaves <target-dir>, with its conf and database, in place):
+#   sudo ./install --uninstall [<target-dir>]
 
-# For testing, set etc to /tmp/etc
-etc="/etc"
-#etc="/tmp/etc"
+set -eu
 
-if [ "$etc" = "/tmp/etc" ]; then
-  # This is a test run.  Create the /etc directories needed.
-  mkdir -p /tmp/etc/init.d 2>/dev/null
-  mkdir    /tmp/etc/logrotate.d 2>/dev/null
-  mkdir    /tmp/etc/rsyslog.d 2>/dev/null
-  mkdir -p /tmp/etc/logwatch/conf/services 2>/dev/null
-  mkdir    /tmp/etc/logwatch/conf/logfiles 2>/dev/null
-  mkdir -p /tmp/etc/logwatch/scripts/services 2>/dev/null
-fi
+SERVICE=airlink-proxy
+RUN_USER=airlinkproxy
 
-if [ $# -ne 3 ]; then
-  echo "Usage: $0 <src-files> <target-dir> <airlink-dns-name-or-ip>"
+# For testing, the /etc tree can be redirected (e.g. AIRLINKPROXY_ETC=/tmp/etc).
+etc=${AIRLINKPROXY_ETC:-/etc}
+
+usage() {
+  cat >&2 << 'EOF'
+Usage: sudo ./install [options]
+       sudo ./install --uninstall [<target-dir>]
+
+Options (on a fresh install, any setting not given is prompted for):
+  --src <dir>                Source tree (default: directory of this script)
+  --target <dir>             Install target (default: /home/airlinkproxy)
+  --sensor <host>            AirLink DNS name or IP (required)
+  --sensor-port <port>       Port of the sensor (default: 80)
+  --server-port <port>       Port the proxy's REST API listens on (default: 8040;
+                             purple-proxy uses 8000 and airgradient-proxy 8080)
+  --poll-freq <secs>         How often to poll the sensor (default: 5)
+  --poll-freq-offset <secs>  Shift each poll this many seconds later within its
+                             poll window; staggers a second proxy polling the
+                             same sensor.  Must be less than --poll-freq
+                             (default: 0)
+  --archive-interval <secs>  How often to write an archive record; must be a
+                             multiple of the poll frequency (default: 300, to
+                             match a typical WeeWX archive interval)
+  --timeout <secs>           Timeout for sensor reads (default: 1)
+  --database-file <path>     Sqlite database (default: <target>/archive/airlinkproxy.sdb)
+  --service-name <name>      Syslog program name (default: airlink-proxy; the
+                             shipped rsyslog/logwatch config is keyed to it)
+  --debug <0|1>              Log debug messages (default: 0)
+  --log-to-stdout <0|1>      Log to stdout instead of syslog (default: 0)
+  -y, --yes                  Take the default for anything not specified
+  -h, --help                 Show this help
+
+Conf files (rsyslog, logrotate, logwatch) are never overwritten once
+installed; a shipped version that differs from the installed one is written
+alongside as <file>.dpkg-new.  On upgrade (an existing airlinkproxy.conf is
+found) nothing is
+prompted for: airlinkproxy.conf is migrated — existing values are kept,
+options given on the command line are applied, new options are added with
+their defaults, and deprecated options are dropped (the previous conf is
+saved as airlinkproxy.conf.bak).  Program files and the logwatch classifier
+script are refreshed; any that is a symlink is left in place.
+EOF
   exit 1
-fi
+}
 
-src_dir="$1"
-target_dir="$2"
-sensor="$3"
+err() {
+  echo "Error: $*" >&2
+  exit 1
+}
 
-mkdir -p "$target_dir"/archive 2> /dev/null
-mkdir -p "$target_dir"/bin/monitor 2> /dev/null
-mkdir    "$target_dir"/bin/server 2> /dev/null
+require_uint() {
+  case "$2" in
+    ''|*[!0-9]*) err "$1 must be a non-negative integer, got '$2'." ;;
+  esac
+}
 
-if [ -d "/etc/logrotate.d" ]; then
-  cp ${src_dir}/etc/logrotate.d/airlink-proxy ${etc}/logrotate.d/
-fi
-
-if [ -d "/etc/logwatch" ]; then
-  cp ${src_dir}/etc/logwatch/conf/services/airlink-proxy.conf ${etc}/logwatch/conf/services/
-  cp ${src_dir}/etc/logwatch/conf/logfiles/airlink-proxy.conf ${etc}/logwatch/conf/logfiles/
-  cp ${src_dir}/etc/logwatch/scripts/services/airlink-proxy ${etc}/logwatch/scripts/services/
-fi
-
-if [ -d "/etc/rsyslog.d" ]; then
-  cp ${src_dir}/etc/rsyslog.d/airlink-proxy.conf ${etc}/rsyslog.d/
-fi
-
-# cp and fixup /etc/init.d/airlink-proxy
-cat ${src_dir}/etc/init.d/airlink-proxy | sed "s%/home/airlinkproxy%$target_dir%g" > /${etc}/init.d/airlink-proxy
-
-# cp bin files
-cp ${src_dir}/home/airlinkproxy/bin/server/__init__.py ${target_dir}/bin/server/
-cp ${src_dir}/home/airlinkproxy/bin/server/server.py ${target_dir}/bin/server/
-cp ${src_dir}/home/airlinkproxy/bin/airlinkproxyd ${target_dir}/bin/
-cp ${src_dir}/home/airlinkproxy/bin/monitor/__init__.py ${target_dir}/bin/monitor/
-cp ${src_dir}/home/airlinkproxy/bin/monitor/monitor.py ${target_dir}/bin/monitor/
-
-# copy and fix up the wrapper
-cat ${src_dir}/home/airlinkproxy/bin/airlinkproxy-wrapper.sh | sed "s%/home/airlinkproxy%$target_dir%g" > ${target_dir}/bin/airlinkproxy-wrapper.sh
-chmod +x ${target_dir}/bin/airlinkproxy-wrapper.sh
-
-echo "# AirlinkProxy configuration file" > ${target_dir}/airlinkproxy.conf
-echo "debug = 0" >> ${target_dir}/airlinkproxy.conf
-echo "log-to-stdout = 0" >> ${target_dir}/airlinkproxy.conf
-echo "service-name = airlink-proxy" >> ${target_dir}/airlinkproxy.conf
-echo "hostname = $sensor" >> ${target_dir}/airlinkproxy.conf
-echo "port = 80" >> ${target_dir}/airlinkproxy.conf
-echo "timeout-secs = 5" >> ${target_dir}/airlinkproxy.conf
-echo "server-port = 8000" >> ${target_dir}/airlinkproxy.conf
-echo "database-file = ${target_dir}/archive/airlinkproxy.sdb" >> ${target_dir}/airlinkproxy.conf
-
-# If for real...
-if [ "$etc" = "/etc" ]; then
-    if [ -d "/etc/rsyslog.d" ]; then
-        service rsyslog restart
+# ask <flag-value> <prompt> <default> — echo the flag value if given, else the
+# default under -y, else prompt on the terminal (empty answer = default).
+ask() {
+  if [ -n "$1" ]; then
+    echo "$1"
+  elif [ "$yes" -eq 1 ]; then
+    echo "$3"
+  else
+    printf '%s [%s]: ' "$2" "$3" > /dev/tty
+    read -r answer < /dev/tty
+    if [ -n "$answer" ]; then
+      echo "$answer"
+    else
+      echo "$3"
     fi
-    if [ -d "/etc/logrotate.d" ]; then
-        service logrotate restart
+  fi
+}
+
+# get_conf <key> — echo the key's value from the existing conf, if any.
+get_conf() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$conf" | head -n 1 | \
+    sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//'
+}
+
+# merge <flag-value> <conf-key> <default> — merge a setting during a conf
+# migration: command line wins, then the existing conf, then the default
+# (a default means the option is new; report it).
+merge() {
+  old=$(get_conf "$2")
+  if [ -n "$1" ]; then
+    if [ -n "$old" ] && [ "$old" != "$1" ]; then
+      echo "Setting $2 = $1 (was $old)." >&2
     fi
-    chmod +x /etc/init.d/airlink-proxy
-    systemctl enable airlink-proxy
-    /etc/init.d/airlink-proxy start
+    echo "$1"
+  elif [ -n "$old" ]; then
+    echo "$old"
+  else
+    echo "Adding new option: $2 = $3." >&2
+    echo "$3"
+  fi
+}
+
+# copy_file <src> <dst> <mode> — install a program/script file, skipping a
+# dst that is a symlink (files are sometimes symlinked to a source checkout
+# so checked-in changes flow through) or one that is already current.
+# Sets file_action to 'installed' or 'kept'.
+copy_file() {
+  file_action='kept'
+  if [ -L "$2" ]; then
+    echo "Leaving symlink $2 in place."
+  elif [ -e "$2" ] && cmp -s "$1" "$2"; then
+    : # already current
+  else
+    mkdir -p "$(dirname "$2")"
+    install -m "$3" "$1" "$2"
+    file_action='installed'
+  fi
+}
+
+# copy_program <src> <dst> <mode> — copy_file for files the running daemon
+# has loaded: a change means the service must be restarted to pick it up.
+copy_program() {
+  copy_file "$@"
+  if [ "$file_action" = 'installed' ]; then
+    restart_needed=1
+  fi
+}
+
+# install_conf <src> <dst> <mode> — a conf file is installed once and NEVER
+# overwritten: users may customize conf files.  When the shipped version
+# differs from the installed one, it is written alongside as <dst>.dpkg-new
+# for hand merging (the Debian convention; logrotate errors on other
+# suffixes such as .NEW but explicitly ignores *.dpkg-new), overwriting any
+# previous .dpkg-new; the .dpkg-new is removed once the installed file
+# matches the shipped one again.  Sets conf_action to 'installed' or 'kept'.
+install_conf() {
+  conf_action='kept'
+  if [ -e "$2" ] || [ -L "$2" ]; then
+    kind='existing file'
+    if [ -L "$2" ]; then
+      kind='symlink'
+    fi
+    if cmp -s "$1" "$2" 2> /dev/null; then
+      echo "Leaving $kind $2 in place."
+      rm -f "$2.dpkg-new"
+    else
+      install -m "$3" "$1" "$2.dpkg-new"
+      echo "Leaving $kind $2 in place; it differs from the shipped version, see $2.dpkg-new."
+    fi
+  else
+    mkdir -p "$(dirname "$2")"
+    install -m "$3" "$1" "$2"
+    conf_action='installed'
+  fi
+}
+
+stop_service() {
+  # Stop the systemd service if it is running.  Used by uninstall only: an
+  # install/upgrade never stops the daemon up front — it restarts it at the
+  # end, and only if something it uses changed.
+  if systemctl is-active --quiet ${SERVICE} 2> /dev/null; then
+    echo "Stopping ${SERVICE}."
+    systemctl stop ${SERVICE}
+  fi
+}
+
+remove_sysv() {
+  # Stop and remove a pre-1.0 SysV installation (init script, pidfile,
+  # nohup-started daemon).  Only called when the init script exists, so the
+  # pkill can only ever match the legacy nohup-started daemon — a systemd
+  # managed daemon never coexists with the init script.
+  echo "Removing legacy SysV init script."
+  ${etc}/init.d/${SERVICE} stop > /dev/null 2>&1 || true
+  update-rc.d ${SERVICE} remove > /dev/null 2>&1 || true
+  rm -f ${etc}/init.d/${SERVICE}
+  rm -f /run/${SERVICE}.pid 2> /dev/null || true
+  # An instance started by the old nohup wrapper can survive the init
+  # script's stop (e.g. a stale pidfile); kill it by command line.
+  pkill -f "airlinkproxyd $target_dir/airlinkproxy.conf" > /dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------------ arguments
+
+yes=0
+uninstall=0
+src_dir=''
+target_dir=''
+sensor=''
+sensor_port=''
+server_port=''
+poll_freq=''
+poll_freq_offset=''
+archive_interval=''
+timeout_secs=''
+database_file=''
+service_name=''
+debug=''
+log_to_stdout=''
+conf_flags_given=0
+
+# The old positional form (<src-files> <target-dir> <airlink-dns-name>) is
+# gone; recognize it and point at the equivalent command.
+if [ $# -eq 3 ]; then
+  positional=1
+  for arg in "$@"; do
+    case "$arg" in -*) positional=0 ;; esac
+  done
+  if [ $positional -eq 1 ]; then
+    err "the positional form has been removed; equivalent command:
+       sudo ./install --target $2 --sensor $3 -y"
+  fi
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage ;;
+    -y|--yes) yes=1; shift ;;
+    --uninstall)
+      uninstall=1
+      shift
+      # An optional target dir may follow; don't swallow an option.
+      if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+        target_dir=$1
+        shift
+      fi
+      ;;
+    --src|--target|--sensor|--sensor-port|--server-port|--poll-freq|\
+    --poll-freq-offset|--archive-interval|--timeout|\
+    --database-file|--service-name|--debug|--log-to-stdout)
+      [ $# -ge 2 ] || err "$1 requires a value."
+      case "$1" in
+        --src) src_dir=$2 ;;
+        --target) target_dir=$2 ;;
+        --sensor) sensor=$2; conf_flags_given=1 ;;
+        --sensor-port) sensor_port=$2; conf_flags_given=1 ;;
+        --server-port) server_port=$2; conf_flags_given=1 ;;
+        --poll-freq) poll_freq=$2; conf_flags_given=1 ;;
+        --poll-freq-offset) poll_freq_offset=$2; conf_flags_given=1 ;;
+        --archive-interval) archive_interval=$2; conf_flags_given=1 ;;
+        --timeout) timeout_secs=$2; conf_flags_given=1 ;;
+        --database-file) database_file=$2; conf_flags_given=1 ;;
+        --service-name) service_name=$2; conf_flags_given=1 ;;
+        --debug) debug=$2; conf_flags_given=1 ;;
+        --log-to-stdout) log_to_stdout=$2; conf_flags_given=1 ;;
+      esac
+      shift 2
+      ;;
+    *) echo "Error: unknown option: $1" >&2; usage ;;
+  esac
+done
+
+[ "$(id -u)" -eq 0 ] || err "this script must be run as root (use sudo)."
+command -v systemctl > /dev/null 2>&1 || err "systemd is required."
+
+# ------------------------------------------------------------------ uninstall
+
+if [ $uninstall -eq 1 ]; then
+  target_dir=${target_dir:-/home/airlinkproxy}
+  stop_service
+  if [ -e ${etc}/init.d/${SERVICE} ]; then
+    remove_sysv
+  fi
+  if systemctl is-enabled --quiet ${SERVICE} 2> /dev/null; then
+    systemctl disable ${SERVICE}
+  fi
+  rm -f ${etc}/systemd/system/${SERVICE}.service
+  systemctl daemon-reload
+  rm -f ${etc}/rsyslog.d/${SERVICE}.conf ${etc}/rsyslog.d/${SERVICE}.conf.dpkg-new
+  if [ -d ${etc}/rsyslog.d ]; then
+    systemctl restart rsyslog || true
+  fi
+  rm -f ${etc}/logrotate.d/${SERVICE} ${etc}/logrotate.d/${SERVICE}.dpkg-new
+  rm -f ${etc}/logwatch/conf/services/${SERVICE}.conf ${etc}/logwatch/conf/services/${SERVICE}.conf.dpkg-new
+  rm -f ${etc}/logwatch/conf/logfiles/${SERVICE}.conf ${etc}/logwatch/conf/logfiles/${SERVICE}.conf.dpkg-new
+  rm -f ${etc}/logwatch/scripts/services/${SERVICE}
+  rm -f "$target_dir"/bin/airlinkproxy-wrapper.sh
+  echo "Uninstalled ${SERVICE}.  $target_dir (conf and database) and the"
+  echo "$RUN_USER user were left in place; remove them manually if desired."
+  exit 0
+fi
+
+# -------------------------------------------------------------------- install
+
+src_dir=${src_dir:-$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)}
+[ -f "$src_dir/home/airlinkproxy/bin/monitor/service.py" ] || \
+  err "$src_dir does not look like a airlink-proxy source tree."
+
+# Check the python dependencies up front.
+command -v python3 > /dev/null 2>&1 || err "python3 is required."
+for module in configobj dateutil requests; do
+  python3 -c "import $module" 2> /dev/null || \
+    err "python3 module '$module' is missing (sudo apt install python3-$module)."
+done
+
+target_dir=${target_dir:-/home/airlinkproxy}
+conf="$target_dir/airlinkproxy.conf"
+fresh=1
+write_conf=1
+if [ -e "$conf" ] || [ -L "$conf" ]; then
+  fresh=0
+  # A symlinked conf points into a source checkout; leave it alone.
+  if [ -L "$conf" ]; then
+    write_conf=0
+  fi
+fi
+
+# On an upgrade the values being validated came from the conf file, not from
+# the command line, so naming only the flags leaves the user with nothing to
+# edit.  $conf_hint is appended to the messages that can trip on an inherited
+# value; it is empty on a fresh install, where the flags really are what the
+# user typed.
+conf_hint=''
+
+validate_settings() {
+  require_uint --sensor-port "$sensor_port"
+  require_uint --server-port "$server_port"
+  # The daemon runs unprivileged, so it cannot bind a port below 1024.
+  { [ "$server_port" -ge 1024 ] && [ "$server_port" -le 65535 ]; } || \
+    err "--server-port ($server_port) must be between 1024 and 65535.$conf_hint"
+  require_uint --poll-freq "$poll_freq"
+  require_uint --poll-freq-offset "$poll_freq_offset"
+  require_uint --archive-interval "$archive_interval"
+  require_uint --timeout "$timeout_secs"
+  case "$debug" in 0|1) ;; *) err "--debug must be 0 or 1." ;; esac
+  case "$log_to_stdout" in 0|1) ;; *) err "--log-to-stdout must be 0 or 1." ;; esac
+  [ "$poll_freq" -gt 0 ] || err "--poll-freq must be greater than zero.$conf_hint"
+  [ "$archive_interval" -gt 0 ] || \
+    err "--archive-interval ($archive_interval) must be greater than zero.$conf_hint"
+  [ $((archive_interval % poll_freq)) -eq 0 ] || \
+    err "--archive-interval ($archive_interval) must be a multiple of --poll-freq ($poll_freq).$conf_hint"
+  [ "$poll_freq_offset" -lt "$poll_freq" ] || \
+    err "--poll-freq-offset ($poll_freq_offset) must be less than --poll-freq ($poll_freq).$conf_hint"
+  if [ "$service_name" != "${SERVICE}" ]; then
+    echo "Warning: the shipped rsyslog/logrotate/logwatch config is keyed to the"
+    echo "service name '${SERVICE}'; with '$service_name' the log routing will not apply."
+  fi
+}
+
+if [ $write_conf -eq 0 ]; then
+  echo "Leaving symlink $conf in place; settings are not migrated."
+  if [ $conf_flags_given -eq 1 ]; then
+    echo "Warning: ignoring conf-related options; $conf is a symlink, edit its target instead."
+  fi
+elif [ $fresh -eq 1 ]; then
+  # Collect the settings for a new conf: options win, then prompts (or -y).
+  if [ "$yes" -eq 0 ]; then
+    ( : < /dev/tty ) 2> /dev/null || \
+      err "no terminal available to prompt for settings; specify them as options or use -y."
+  fi
+  sensor=$(ask "$sensor" 'AirLink DNS name or IP' '')
+  [ -n "$sensor" ] || err "a sensor must be specified (--sensor)."
+  sensor_port=$(ask "$sensor_port" 'Port of the sensor' 80)
+  server_port=$(ask "$server_port" "Port the proxy's REST API listens on" 8040)
+  poll_freq=$(ask "$poll_freq" 'How often to poll the sensor (seconds)' 5)
+  poll_freq_offset=$(ask "$poll_freq_offset" 'Poll offset, to stagger a second proxy (seconds)' 0)
+  archive_interval=$(ask "$archive_interval" 'Archive interval (seconds, a multiple of the poll frequency)' 300)
+  timeout_secs=$(ask "$timeout_secs" 'Timeout for sensor reads (seconds)' 1)
+  database_file=$(ask "$database_file" 'Sqlite database file' "$target_dir/archive/airlinkproxy.sdb")
+  service_name=$(ask "$service_name" 'Syslog program name' "${SERVICE}")
+  debug=$(ask "$debug" 'Log debug messages (0 or 1)' 0)
+  log_to_stdout=$(ask "$log_to_stdout" 'Log to stdout instead of syslog (0 or 1)' 0)
+  validate_settings
+else
+  # Upgrade: migrate the existing conf.  Command line options win, then the
+  # existing conf's values; options new to this version are added with their
+  # defaults, and deprecated options are dropped.  Nothing is prompted for.
+  echo "Migrating settings from existing $conf."
+  old_sensor=$(get_conf hostname)
+  if [ -n "$sensor" ] && [ -n "$old_sensor" ] && [ "$sensor" != "$old_sensor" ]; then
+    echo "Setting hostname = $sensor (was $old_sensor)."
+  fi
+  if [ -z "$sensor" ]; then
+    sensor=$old_sensor
+  fi
+  [ -n "$sensor" ] || err "existing conf has no hostname; specify --sensor."
+  sensor_port=$(merge "$sensor_port" port 80)
+  server_port=$(merge "$server_port" server-port 8040)
+  poll_freq=$(merge "$poll_freq" poll-freq-secs 5)
+  poll_freq_offset=$(merge "$poll_freq_offset" poll-freq-offset 0)
+  # Before 1.0 the offset only shifted the archive boundary and the shipped
+  # default equalled poll-freq-secs.  It now shifts the poll itself and must be
+  # less than poll-freq-secs, so an inherited value at or above it no longer
+  # means anything; reset it rather than refuse to upgrade.
+  #
+  # These two are checked here, ahead of the arithmetic below, so a conf with a
+  # non-numeric value gets the friendly message rather than [ printing a raw
+  # "Illegal number" first.  validate_settings re-checks them harmlessly.
+  require_uint --poll-freq "$poll_freq"
+  require_uint --poll-freq-offset "$poll_freq_offset"
+  if [ "$poll_freq_offset" -ge "$poll_freq" ]; then
+    echo "poll-freq-offset ($poll_freq_offset) is no longer valid with poll-freq-secs"
+    echo "($poll_freq); it now shifts the poll itself and must be smaller.  Resetting to 0."
+    poll_freq_offset=0
+  fi
+  # Pre-1.0 confs have no archive-interval-secs: that installer never wrote one
+  # and the daemon hardcoded 60.  Migrating to 60 rather than the new 300
+  # default keeps an upgraded install on the cadence it has always had; a user
+  # who wants 300 sets it deliberately.
+  archive_interval=$(merge "$archive_interval" archive-interval-secs 60)
+  timeout_secs=$(merge "$timeout_secs" timeout-secs 1)
+  database_file=$(merge "$database_file" database-file "$target_dir/archive/airlinkproxy.sdb")
+  service_name=$(merge "$service_name" service-name "${SERVICE}")
+  debug=$(merge "$debug" debug 0)
+  log_to_stdout=$(merge "$log_to_stdout" log-to-stdout 0)
+  # Report options the current version no longer knows.  NOTE: this must be
+  # a single space-delimited line — the membership test below matches
+  # " <key> ", and a key at a line break would be falsely reported as
+  # deprecated (the 4.0.0 timeout-secs/poll-freq-offset bug).
+  known_keys=' debug log-to-stdout service-name hostname port timeout-secs server-port poll-freq-secs poll-freq-offset archive-interval-secs database-file '
+  for key in $(sed -n 's/^[[:space:]]*\([A-Za-z0-9_-]\{1,\}\)[[:space:]]*=.*/\1/p' "$conf"); do
+    case "$known_keys" in
+      *" $key "*) ;;
+      *) echo "Removing deprecated option: $key." ;;
+    esac
+  done
+  conf_hint="
+These values come from $conf (keys server-port, poll-freq-secs,
+poll-freq-offset, archive-interval-secs); edit that file, or pass the matching
+option, and re-run."
+  validate_settings
+fi
+
+# The daemon is left running while files are refreshed (Python loads its
+# code at startup, so files can be replaced under it); it is restarted at
+# the very end, and only if something changed.  The exception: a pre-1.0
+# SysV daemon must be stopped and removed before systemd takes over.
+restart_needed=0
+if [ -e ${etc}/init.d/${SERVICE} ]; then
+  remove_sysv
+fi
+
+# The daemon runs as a dedicated system user.
+if ! id -u "$RUN_USER" > /dev/null 2>&1; then
+  echo "Creating system user $RUN_USER."
+  useradd --system --home-dir "$target_dir" --no-create-home \
+          --shell /usr/sbin/nologin "$RUN_USER"
+fi
+
+# Program files.
+mkdir -p "$target_dir/archive" "$target_dir/bin/monitor" "$target_dir/bin/server"
+copy_program "$src_dir/home/airlinkproxy/bin/airlinkproxyd" "$target_dir/bin/airlinkproxyd" 755
+copy_program "$src_dir/home/airlinkproxy/bin/monitor/__init__.py" "$target_dir/bin/monitor/__init__.py" 644
+copy_program "$src_dir/home/airlinkproxy/bin/monitor/model.py" "$target_dir/bin/monitor/model.py" 644
+copy_program "$src_dir/home/airlinkproxy/bin/monitor/database.py" "$target_dir/bin/monitor/database.py" 644
+copy_program "$src_dir/home/airlinkproxy/bin/monitor/service.py" "$target_dir/bin/monitor/service.py" 644
+copy_program "$src_dir/home/airlinkproxy/bin/server/__init__.py" "$target_dir/bin/server/__init__.py" 644
+copy_program "$src_dir/home/airlinkproxy/bin/server/server.py" "$target_dir/bin/server/server.py" 644
+# Pre-4.0 leftovers: the nohup wrapper and the pre-restructure monolith.
+rm -f "$target_dir/bin/airlinkproxy-wrapper.sh" "$target_dir/bin/monitor/monitor.py"
+
+# Configuration: freshly generated, or rewritten from the migrated settings
+# only when the result actually differs.  A symlinked conf is never touched.
+if [ $write_conf -eq 1 ]; then
+  cat > "$conf.tmp" << EOF
+# AirLinkProxy configuration file
+debug = $debug
+log-to-stdout = $log_to_stdout
+service-name = $service_name
+hostname = $sensor
+port = $sensor_port
+timeout-secs = $timeout_secs
+server-port = $server_port
+poll-freq-secs = $poll_freq
+# Shifts each poll this many seconds later within its poll window.  If more
+# than one proxy polls the same sensor, stagger them by setting a non-zero
+# offset on the second proxy.  Must be less than poll-freq-secs.
+poll-freq-offset = $poll_freq_offset
+archive-interval-secs = $archive_interval
+database-file = $database_file
+EOF
+  if [ $fresh -eq 1 ]; then
+    echo "Generating $conf."
+    mv "$conf.tmp" "$conf"
+    chmod 644 "$conf"
+    restart_needed=1
+  elif cmp -s "$conf.tmp" "$conf"; then
+    echo "$conf is unchanged."
+    rm -f "$conf.tmp"
+  else
+    cp -p "$conf" "$conf.bak"
+    echo "Rewriting $conf (previous version saved as $conf.bak)."
+    mv "$conf.tmp" "$conf"
+    chmod 644 "$conf"
+    restart_needed=1
+  fi
+fi
+
+# Only the target dir is chowned, exactly as purple-proxy does.  A database
+# located elsewhere is the admin's to arrange: the daemon's Database.create
+# makes the directory as $RUN_USER when it can, and if it cannot the daemon
+# fails to start, which the is-active check at the end of this script reports.
+# Chowning dirname("$database_file") was tried and is worse than doing nothing
+# -- database-file = /tmp/x.sdb would chown /tmp, /home/pi/x.sdb would lock
+# that user out of their own home, and it re-fired on every upgrade.
+chown -R "$RUN_USER:$RUN_USER" "$target_dir"
+
+# Log plumbing.  rsyslog routes the daemon's syslog output to
+# /var/log/airlink-proxy.log; install and restart it before starting the
+# service so no log lines are dropped.
+if [ -d ${etc}/rsyslog.d ]; then
+  install_conf "$src_dir/etc/rsyslog.d/${SERVICE}.conf" ${etc}/rsyslog.d/${SERVICE}.conf 644
+  if [ "$conf_action" = 'installed' ]; then
+    systemctl restart rsyslog
+  fi
+else
+  echo "Warning: rsyslog is not installed; the daemon's log will only be in the journal."
+fi
+if [ -d ${etc}/logrotate.d ]; then
+  install_conf "$src_dir/etc/logrotate.d/${SERVICE}" ${etc}/logrotate.d/${SERVICE} 644
+fi
+if [ -d ${etc}/logwatch ]; then
+  install_conf "$src_dir/etc/logwatch/conf/services/${SERVICE}.conf" ${etc}/logwatch/conf/services/${SERVICE}.conf 644
+  install_conf "$src_dir/etc/logwatch/conf/logfiles/${SERVICE}.conf" ${etc}/logwatch/conf/logfiles/${SERVICE}.conf 644
+  # The logwatch classifier is code, not conf: it matches the daemon's log
+  # messages verbatim, so it must ship with the daemon.
+  copy_file "$src_dir/etc/logwatch/scripts/services/${SERVICE}" ${etc}/logwatch/scripts/services/${SERVICE} 755
+fi
+
+# The systemd unit, with the target directory substituted in; installed
+# (with a daemon-reload) only when it changed.
+unit=${etc}/systemd/system/${SERVICE}.service
+if [ -L "$unit" ]; then
+  echo "Leaving symlink $unit in place."
+else
+  # $target_dir is sed REPLACEMENT text, where & means "the matched text" and
+  # the delimiter ends the command; both are legal in a path.  Unescaped,
+  # --target '/srv/a&b' silently produced a wrong ExecStart and '/srv/50%off'
+  # broke the s command outright.
+  esc_target=$(printf '%s\n' "$target_dir" | sed 's/[&%\\]/\\&/g')
+  sed "s%/home/airlinkproxy%$esc_target%g" \
+      "$src_dir/etc/systemd/system/${SERVICE}.service" > "$unit.tmp"
+  if [ -e "$unit" ] && cmp -s "$unit.tmp" "$unit"; then
+    rm -f "$unit.tmp"
+  else
+    mv "$unit.tmp" "$unit"
+    chmod 644 "$unit"
+    systemctl daemon-reload
+    restart_needed=1
+  fi
+fi
+if ! systemctl enable ${SERVICE} > /dev/null 2>&1; then
+  echo "Warning: could not enable ${SERVICE}; it will not start at boot."
+fi
+
+# Start the daemon if it is not running; restart it only if something it
+# uses changed; otherwise leave it alone.
+if systemctl is-active --quiet ${SERVICE} 2> /dev/null; then
+  if [ $restart_needed -eq 1 ]; then
+    echo "Restarting ${SERVICE}."
+    systemctl restart ${SERVICE}
+  else
+    echo "Nothing changed; leaving the running daemon alone."
+  fi
+else
+  systemctl start ${SERVICE}
+fi
+
+sleep 2
+if systemctl is-active --quiet ${SERVICE}; then
+  echo "${SERVICE} is installed and running."
+else
+  err "${SERVICE} failed to start; see 'systemctl status ${SERVICE}' and 'journalctl -u ${SERVICE}'."
 fi

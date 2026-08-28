@@ -18,27 +18,63 @@ my $INSANE_SENSOR_READINGS = 'Insane Sensor Readings';
 my $OLD_SENSOR_READINGS = 'Old (Insane?) Sensor Readings';
 my $ARCHIVE_INSERT_ERRORS = 'Archive Insert Errors';
 my $CURRENT_INSERT_ERRORS = 'Current Insert Errors';
+my $TWO_MINUTE_INSERT_ERRORS = 'Two-Minute Insert Errors';
+my $POLL_INSERT_ERRORS = 'Poll Insert Errors';
+my $TWO_MINUTE_CLEAR_ERRORS = 'Two-Minute Clear Errors';
+my $TWO_MINUTE_READ_ERRORS = 'Two-Minute Read Errors';
+my $TWO_MINUTE_CLEARED = 'Two-Minute Average Cleared';
 my $TMP_NAME_RESOLUTON_ERRORS = 'Tmp Name Resolution Errors';
 my $NO_ROUTE_TO_HOST_ERRORS = 'No Route to Host';
 my $SKIPPED_ARCHIVE_RECORDS = 'Skipped archive records';
 my $CONNECTION_TIMEOUT = 'Connection timed out';
 my $CONNECTION_REFUSED = 'Connection refused';
 my $NAME_UNKNOWN = 'Name or service not known';
+my $MISSING_FIELDS = 'Readings missing field(s)';
+my $BOOT_TIME_READINGS = 'Readings timestamped since boot';
+my $SENSOR_READ_ERRORS = 'Errors Reported by Sensor';
+my $FETCH_FAILURES = 'Sensor Fetch Failures';
+my $TYPE_CONVERSION_ERRORS = 'Type 5 Conversion Errors';
+my $SESSION_CLOSE_ERRORS = 'Non-fatal Session Close Errors';
+my $ERROR_RESPONSE_FAILURES = 'Error Responses Not Sent';
+my $SERVER_FAILURES = 'REST Server Failures';
+my $RETRIED_REQUESTS = 'Retried Sensor Requests';
+
+my $GET_VERSION             = 'get-version';
+my $GET_EARLIEST_TIMESTAMP  = 'get-earliest-timestamp';
+my $FETCH_CURRENT_RECORD    = 'fetch-current-record';
+my $FETCH_ARCHIVE_RECORDS   = 'fetch-archive-records';
+my $FETCH_TWO_MINUTE_RECORD = 'fetch-two-minute-record';
+my $GET_ARCHIVE_INTERVAL    = 'get-archive-interval-secs';
+my $REQUEST_ERRORS          = 'Request Errors';
 
 # any lines that do not match the patterns we define
 my @unmatched = ();
 
 # keep details
 my @current_insert_errors = ();
+my @two_minute_insert_errors = ();
+my @poll_insert_errors = ();
 my @archive_insert_errors = ();
 my @insane_readings = ();
 my @old_readings = ();
+my @request_errors = ();
+my @missing_fields = ();
+my @boot_time_readings = ();
+my @type_conversion_errors = ();
+my @server_failures = ();
 
 my %itemized = (
     'Archive Insert Errors', \@archive_insert_errors,
     'Current Insert Errors', \@current_insert_errors,
+    'Two-Minute Insert Errors', \@two_minute_insert_errors,
+    'Poll Insert Errors'    , \@poll_insert_errors,
     'Insane Readings', \@insane_readings,
     'Old (Insane?) Readings', \@old_readings,
+    'Request Errors'       , \@request_errors,
+    'Missing Fields'       , \@missing_fields,
+    'Readings Timestamped Since Boot', \@boot_time_readings,
+    'Type 5 Conversion Errors', \@type_conversion_errors,
+    'REST Server Failures'  , \@server_failures,
     );
 
 my %summaries = (
@@ -57,6 +93,18 @@ while(defined($_ = <STDIN>)) {
     } elsif (/Could not save archive reading to database/) {
         push @archive_insert_errors, $_;
         $errors{$ARCHIVE_INSERT_ERRORS} += 1;
+    } elsif (/Could not save poll readings to database/) {
+        push @poll_insert_errors, $_;
+        $errors{$POLL_INSERT_ERRORS} += 1;
+    } elsif (/Could not read the stored two-minute reading:/) {
+        $errors{$TWO_MINUTE_READ_ERRORS} += 1;
+    } elsif (/Could not clear two-minute reading from database/) {
+        $errors{$TWO_MINUTE_CLEAR_ERRORS} += 1;
+    } elsif (/Two-minute average cleared:/) {
+        $counts{$TWO_MINUTE_CLEARED} += 1;
+    } elsif (/Could not save two-minute reading to database/) {
+        push @two_minute_insert_errors, $_;
+        $errors{$TWO_MINUTE_INSERT_ERRORS} += 1;
     } elsif (/Could not save current reading to database/) {
         push @current_insert_errors, $_;
         $errors{$CURRENT_INSERT_ERRORS} += 1;
@@ -80,6 +128,43 @@ while(defined($_ = <STDIN>)) {
         $errors{$CONNECTION_TIMEOUT} += 1;
     } elsif (/Failed to establish a new connection: .* Name or service not known/) {
         $errors{$NAME_UNKNOWN} += 1;
+    } elsif (/Sensor didn't report field\(s\):/) {
+        $errors{$MISSING_FIELDS} += 1;
+        push @missing_fields, $_;
+    } elsif (/last_report_time must be time since boot/) {
+        push @boot_time_readings, $_;
+        $errors{$BOOT_TIME_READINGS} += 1;
+    } elsif (/convert_data_structure_type_5_to_6: exception:/) {
+        push @type_conversion_errors, $_;
+        $errors{$TYPE_CONVERSION_ERRORS} += 1;
+    } elsif (/Non-fatal: could not send error response:/) {
+        $errors{$ERROR_RESPONSE_FAILURES} += 1;
+    } elsif (/Non-fatal: calling session\.close\(\):/) {
+        $errors{$SESSION_CLOSE_ERRORS} += 1;
+    } elsif (/REST server on port .* died:/) {
+        push @server_failures, $_;
+        $errors{$SERVER_FAILURES} += 1;
+    } elsif (/Retrying request\./) {
+        $errors{$RETRIED_REQUESTS} += 1;
+    } elsif (/returned error\(\d+\):/) {
+        $errors{$SENSOR_READ_ERRORS} += 1;
+    } elsif (/collect_data: Attempt to fetch from:/) {
+        $errors{$FETCH_FAILURES} += 1;
+    } elsif (/request_error: /) {
+        push @request_errors, $_;
+        $errors{$REQUEST_ERRORS} += 1;
+    } elsif (/get-version: /) {
+        $counts{$GET_VERSION} += 1;
+    } elsif (/fetch-current-record/) {
+        $counts{$FETCH_CURRENT_RECORD} += 1;
+    } elsif (/get-archive-interval-secs/) {
+        $counts{$GET_ARCHIVE_INTERVAL} += 1;
+    } elsif (/fetch-two-minute-record/) {
+        $counts{$FETCH_TWO_MINUTE_RECORD} += 1;
+    } elsif (/fetch-archive-records/) {
+        $counts{$FETCH_ARCHIVE_RECORDS} += 1;
+    } elsif (/get-earliest-timestamp/) {
+        $counts{$GET_EARLIEST_TIMESTAMP} += 1;
     } elsif (/host:port *:/ ||
              /conf_file *:/ ||
              /server_port *:/ ||

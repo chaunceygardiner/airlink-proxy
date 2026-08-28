@@ -1,0 +1,45 @@
+title: airlink-proxy
+description: >-
+  A proxy and archiver for the Davis AirLink air quality sensor — it absorbs
+  the client load the device cannot take, sanity checks every reading, and
+  keeps an archive history that a weather database can be backfilled from.
+url: "https://chaunceygardiner.github.io"
+baseurl: "/airlink-proxy"
+
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-sitemap
+  # GitHub Pages enables this one by default; naming it explicitly is what
+  # makes .md cross-links resolve in a LOCAL build too.
+  - jekyll-relative-links
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "airlink-proxy on GitHub":
+    - "https://github.com/chaunceygardiner/airlink-proxy"
+aux_links_new_tab: true
+
+# External links shown at the bottom of the left sidebar nav, on every page.
+nav_external_links:
+  - title: airlink-proxy on GitHub
+    url: https://github.com/chaunceygardiner/airlink-proxy
+  - title: Download airlink-proxy.zip
+    url: https://github.com/chaunceygardiner/airlink-proxy/archive/refs/heads/master.zip
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  important:
+    title: Important
+    color: red
+  tip:
+    title: Tip
+    color: green
+
+footer_content: >-
+  airlink-proxy is Copyright &copy; 2020&ndash;2026 John A Kline and is
+  licensed under the GNU Public License v3.

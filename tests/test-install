@@ -1,0 +1,499 @@
+#!/bin/sh
+
+# Copyright (c) 2026 John A Kline
+# See the file LICENSE for your full rights.
+#
+# Tests for the install script.  Runs entirely unprivileged: root-only
+# commands (systemctl, useradd, chown, ...) are stubbed on PATH and the
+# /etc tree is redirected into a sandbox with AIRLINKPROXY_ETC.
+#
+#   tests/test-install
+#
+# Exits non-zero if any test fails.
+
+set -u
+
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+installer="$repo/install"
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/airlink-proxy-test.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+# ----------------------------------------------------------------- harness
+
+passes=0
+failures=0
+
+pass() {
+  passes=$((passes + 1))
+  echo "PASS: $1"
+}
+
+fail() {
+  failures=$((failures + 1))
+  echo "FAIL: $1"
+}
+
+# check <label> <command...> — pass if the command succeeds quietly.
+check() {
+  label=$1
+  shift
+  if "$@" > /dev/null 2>&1; then
+    pass "$label"
+  else
+    fail "$label"
+  fi
+}
+
+# check_not <label> <command...> — pass if the command fails.
+check_not() {
+  label=$1
+  shift
+  if "$@" > /dev/null 2>&1; then
+    fail "$label"
+  else
+    pass "$label"
+  fi
+}
+
+# contains <label> <text> <pattern> — pass if the text contains the pattern.
+contains() {
+  if echo "$2" | grep -q -e "$3"; then
+    pass "$1"
+  else
+    fail "$1"
+  fi
+}
+
+# lacks <label> <text> <pattern> — pass if the text does NOT contain the pattern.
+lacks() {
+  if echo "$2" | grep -q -e "$3"; then
+    fail "$1"
+  else
+    pass "$1"
+  fi
+}
+
+# Stub the root-only commands; id must report uid 0 so the root check passes.
+stubs="$tmp/stubs"
+mkdir -p "$stubs"
+for cmd in useradd update-rc.d pkill; do
+  printf '#!/bin/sh\nexit 0\n' > "$stubs/$cmd"
+  chmod 755 "$stubs/$cmd"
+done
+# chown records its arguments so tests can assert WHAT the installer chowns,
+# not merely that it survived the call.
+printf '#!/bin/sh\necho "$@" >> "${CHOWN_LOG:-/dev/null}"\nexit 0\n' > "$stubs/chown"
+chmod 755 "$stubs/chown"
+printf '#!/bin/sh\necho 0\n' > "$stubs/id"
+chmod 755 "$stubs/id"
+
+# The systemctl stub logs every call and simulates the airlink-proxy
+# service's active state with a state file, so the tests can assert when
+# the installer starts, restarts, or leaves the daemon alone.
+cat > "$stubs/systemctl" << 'STUB'
+#!/bin/sh
+echo "$*" >> "${SYSTEMCTL_LOG:-/dev/null}"
+state="${SYSTEMCTL_STATE:-}"
+case "$*" in
+  'is-active --quiet airlink-proxy')
+    if [ -n "$state" ] && [ -e "$state" ]; then exit 0; fi
+    exit 3 ;;
+  'start airlink-proxy'|'restart airlink-proxy')
+    if [ -n "$state" ]; then touch "$state"; fi ;;
+  'stop airlink-proxy')
+    if [ -n "$state" ]; then rm -f "$state"; fi ;;
+esac
+exit 0
+STUB
+chmod 755 "$stubs/systemctl"
+
+etc="$tmp/etc"
+target="$tmp/target"
+
+# new_sandbox — a fresh fake /etc and target directory, service stopped.
+new_sandbox() {
+  rm -rf "$etc" "$target" "$tmp/systemctl.state"
+  mkdir -p "$etc/rsyslog.d" "$etc/logrotate.d" "$etc/logwatch" \
+           "$etc/systemd/system" "$etc/init.d" "$target"
+  reset_log
+}
+
+reset_log() {
+  : > "$tmp/systemctl.log"
+}
+
+# run_install <args...> — run the installer against the sandbox.
+run_install() {
+  SYSTEMCTL_LOG="$tmp/systemctl.log" SYSTEMCTL_STATE="$tmp/systemctl.state" \
+    CHOWN_LOG="$tmp/chown.log" \
+    PATH="$stubs:$PATH" AIRLINKPROXY_ETC="$etc" sh "$installer" "$@"
+}
+
+# conf_value <key> — the key's value in the sandbox conf.
+conf_value() {
+  sed -n "s/^$1 = //p" "$target/airlinkproxy.conf"
+}
+
+# mode_of <file> — octal permissions.
+mode_of() {
+  stat -c %a "$1"
+}
+
+# ------------------------------------------------- command line behavior
+
+echo "--- command line"
+
+out=$(run_install -h 2>&1)
+check_not 'help exits non-zero' run_install -h
+contains 'help prints usage' "$out" '^Usage:'
+
+out=$(run_install --bogus 2>&1)
+check_not 'unknown option exits non-zero' run_install --bogus
+contains 'unknown option reported' "$out" 'unknown option: --bogus'
+
+out=$(run_install --sensor 2>&1)
+contains 'missing value reported' "$out" '\-\-sensor requires a value'
+
+out=$(run_install . /home/airlinkproxy airlink 2>&1)
+check_not 'positional form exits non-zero' run_install . /home/airlinkproxy airlink
+contains 'positional form is rejected' "$out" 'positional form has been removed'
+contains 'positional rejection shows equivalent' "$out" '\-\-target /home/airlinkproxy \-\-sensor airlink -y'
+
+# ------------------------------------------------------- fresh install
+
+echo "--- fresh install (flags + -y), with legacy SysV present"
+
+new_sandbox
+touch "$etc/init.d/airlink-proxy"
+chmod 755 "$etc/init.d/airlink-proxy"
+mkdir -p "$target/bin"
+touch "$target/bin/airlinkproxy-wrapper.sh"
+
+out=$(run_install --target "$target" --sensor airlink --poll-freq-offset 2 -y 2>&1)
+contains 'install reports success' "$out" 'installed and running'
+check 'conf generated' test -f "$target/airlinkproxy.conf"
+check 'sensor in conf' test "$(conf_value hostname)" = airlink
+check 'offset in conf' test "$(conf_value poll-freq-offset)" = 2
+check 'default archive interval in conf' test "$(conf_value archive-interval-secs)" = 300
+check 'default database file in conf' test "$(conf_value database-file)" = "$target/archive/airlinkproxy.sdb"
+check 'unit ExecStart substituted' grep -q "ExecStart=/usr/bin/python3 $target/bin/airlinkproxyd $target/airlinkproxy.conf" "$etc/systemd/system/airlink-proxy.service"
+check 'unit runs as airlinkproxy' grep -q 'User=airlinkproxy' "$etc/systemd/system/airlink-proxy.service"
+check 'model.py installed' test -f "$target/bin/monitor/model.py"
+check 'database.py installed' test -f "$target/bin/monitor/database.py"
+check 'service.py installed' test -f "$target/bin/monitor/service.py"
+check 'server.py installed' test -f "$target/bin/server/server.py"
+check 'archive dir created' test -d "$target/archive"
+
+contains 'legacy SysV removed' "$out" 'Removing legacy SysV init script'
+check 'init.d script gone' test ! -e "$etc/init.d/airlink-proxy"
+check 'nohup wrapper gone' test ! -e "$target/bin/airlinkproxy-wrapper.sh"
+
+# rsyslog and logrotate insist on sane ownership/permissions.
+check 'airlinkproxyd mode 755' test "$(mode_of "$target/bin/airlinkproxyd")" = 755
+check 'rsyslog conf mode 644' test "$(mode_of "$etc/rsyslog.d/airlink-proxy.conf")" = 644
+check 'logrotate conf mode 644' test "$(mode_of "$etc/logrotate.d/airlink-proxy")" = 644
+check 'logwatch script mode 755' test "$(mode_of "$etc/logwatch/scripts/services/airlink-proxy")" = 755
+check 'unit mode 644' test "$(mode_of "$etc/systemd/system/airlink-proxy.service")" = 644
+
+# ------------------------------------------------------------ validation
+
+echo "--- validation"
+
+new_sandbox
+out=$(run_install --target "$target" --sensor x --archive-interval 61 -y 2>&1)
+contains 'archive interval multiple enforced' "$out" 'must be a multiple of'
+# Zero passes the multiple check (0 % n == 0) but divides by zero in the daemon's
+# archive scheduling, so it must be rejected here.
+out=$(run_install --target "$target" --sensor x --archive-interval 0 -y 2>&1)
+contains 'zero archive interval rejected' "$out" 'must be greater than zero'
+out=$(run_install --target "$target" --sensor x --server-port abc -y 2>&1)
+contains 'non-integer rejected' "$out" 'must be a non-negative integer'
+out=$(run_install --target "$target" --sensor x --debug 2 -y 2>&1)
+contains 'debug 0/1 enforced' "$out" '\-\-debug must be 0 or 1'
+out=$(run_install --target "$target" -y 2>&1)
+contains 'missing sensor rejected' "$out" 'a sensor must be specified'
+# The offset shifts each poll within its window, so at or beyond poll-freq it
+# would silently slow polling instead of staggering it.
+out=$(run_install --target "$target" --sensor x --poll-freq-offset 5 -y 2>&1)
+contains 'offset equal to poll-freq rejected' "$out" 'must be less than --poll-freq'
+out=$(run_install --target "$target" --sensor x --poll-freq 5 --poll-freq-offset 7 -y 2>&1)
+contains 'offset above poll-freq rejected' "$out" 'must be less than --poll-freq'
+# The daemon runs unprivileged and cannot bind below 1024; the REST thread would
+# die at bind time and leave the service looking healthy.
+out=$(run_install --target "$target" --sensor x --server-port 80 -y 2>&1)
+contains 'privileged server port rejected' "$out" 'must be between 1024 and 65535'
+out=$(run_install --target "$target" --sensor x --server-port 70000 -y 2>&1)
+contains 'out of range server port rejected' "$out" 'must be between 1024 and 65535'
+check 'failed validation leaves no conf' test ! -e "$target/airlinkproxy.conf"
+
+# A database outside the target dir must not cause anything outside the target
+# dir to be chowned: chowning dirname(database-file) would take ownership of
+# /tmp or a user's home.  Only the target dir is ever chowned.
+new_sandbox
+outside="$tmp/elsewhere"
+mkdir -p "$outside"
+run_install --target "$target" --sensor x --database-file "$outside/airlink.sdb" -y > /dev/null 2>&1
+check_not 'never chowns the database directory' grep -q "$outside" "$tmp/chown.log"
+check 'chowns the target dir' grep -q "$target" "$tmp/chown.log"
+
+# An offset smaller than poll-freq is the supported stagger and must install.
+new_sandbox
+run_install --target "$target" --sensor x --poll-freq 10 --poll-freq-offset 7 -y > /dev/null 2>&1
+check 'offset below poll-freq accepted' test "$(conf_value poll-freq-offset)" = 7
+
+# ------------------------------------------------------------- prompting
+
+echo "--- prompting"
+
+if command -v script > /dev/null 2>&1; then
+  new_sandbox
+  # Answers: sensor, Enter (sensor port), server port, Enter (poll freq),
+  # offset, then Enter for the remaining six prompts.
+  printf 'airlink2\n\n8001\n\n2\n\n\n\n\n\n\n' | \
+    SYSTEMCTL_LOG="$tmp/systemctl.log" SYSTEMCTL_STATE="$tmp/systemctl.state" \
+    CHOWN_LOG="$tmp/chown.log" \
+    PATH="$stubs:$PATH" AIRLINKPROXY_ETC="$etc" \
+    script -qec "sh '$installer' --target '$target'" /dev/null > "$tmp/prompt.out" 2>&1
+  check 'typed sensor in conf' test "$(conf_value hostname)" = airlink2
+  check 'typed server port in conf' test "$(conf_value server-port)" = 8001
+  check 'typed offset in conf' test "$(conf_value poll-freq-offset)" = 2
+  check 'Enter takes default (poll freq)' test "$(conf_value poll-freq-secs)" = 5
+  check 'Enter takes default (timeout)' test "$(conf_value timeout-secs)" = 1
+else
+  echo "SKIP: prompting tests ('script' not available)"
+fi
+
+if command -v setsid > /dev/null 2>&1; then
+  new_sandbox
+  # Detach from any controlling terminal so /dev/tty is unavailable.
+  out=$(setsid sh -c "PATH='$stubs:$PATH' AIRLINKPROXY_ETC='$etc' sh '$installer' --target '$target' --sensor x < /dev/null 2>&1")
+  contains 'no tty without -y is an error' "$out" 'no terminal available'
+else
+  echo "SKIP: no-tty test ('setsid' not available)"
+fi
+
+# ------------------------------------------------------- conf migration
+
+echo "--- upgrade: conf migration"
+
+new_sandbox
+run_install --target "$target" --sensor airlink --poll-freq-offset 2 -y > /dev/null 2>&1
+# Simulate an older conf: no archive-interval-secs yet, one deprecated option.
+sed -i '/archive-interval-secs/d' "$target/airlinkproxy.conf"
+echo 'outfile = /tmp/airlink-proxy.json' >> "$target/airlinkproxy.conf"
+# Simulate the pre-4.0 monolith lingering on the target.
+touch "$target/bin/monitor/monitor.py"
+
+out=$(run_install --target "$target" --server-port 8001 -y 2>&1)
+contains 'migration reported' "$out" 'Migrating settings'
+contains 'new option reported' "$out" 'Adding new option: archive-interval-secs = 60'
+contains 'deprecated option reported' "$out" 'Removing deprecated option: outfile'
+# Regression (4.0.0): keys at line breaks in the known-keys list were falsely
+# reported as deprecated.  Exactly ONE option in this conf is deprecated.
+deprecated_count=$(echo "$out" | grep -c 'Removing deprecated option')
+check 'no known option reported as deprecated' test "$deprecated_count" = 1
+contains 'override reported with old value' "$out" 'Setting server-port = 8001 (was 8040)'
+contains 'backup reported' "$out" 'saved as'
+check 'hand-set value preserved' test "$(conf_value poll-freq-offset)" = 2
+check 'sensor preserved' test "$(conf_value hostname)" = airlink
+# An upgraded pre-1.0 conf keeps the 60s cadence it always ran at; only fresh
+# installs get the new 300 default.
+check 'upgrade preserves the pre-1.0 60s interval' test "$(conf_value archive-interval-secs)" = 60
+check 'flag override applied' test "$(conf_value server-port)" = 8001
+check_not 'deprecated option pared' grep -q outfile "$target/airlinkproxy.conf"
+
+check 'backup written' test -f "$target/airlinkproxy.conf.bak"
+check 'backup has pre-migration content' grep -q outfile "$target/airlinkproxy.conf.bak"
+check 'stale monitor.py removed on upgrade' test ! -e "$target/bin/monitor/monitor.py"
+
+# A --sensor override on upgrade is applied AND reported like other overrides.
+out=$(run_install --target "$target" --sensor airlink2 -y 2>&1)
+contains 'sensor override reported with old value' "$out" 'Setting hostname = airlink2 (was airlink)'
+check 'sensor override applied' test "$(conf_value hostname)" = airlink2
+
+# Pre-1.0 shipped poll-freq-offset = 5 with poll-freq-secs = 5, where the offset
+# only moved the archive boundary.  It now shifts the poll itself and must be
+# smaller, so the inherited value is reset rather than failing the upgrade.
+new_sandbox
+run_install --target "$target" --sensor airlink -y > /dev/null 2>&1
+sed -i 's/^poll-freq-offset = .*/poll-freq-offset = 5/' "$target/airlinkproxy.conf"
+out=$(run_install --target "$target" -y 2>&1)
+contains 'legacy offset reset reported' "$out" 'Resetting to 0'
+check 'legacy offset reset in conf' test "$(conf_value poll-freq-offset)" = 0
+check 'legacy offset reset preserves poll-freq' test "$(conf_value poll-freq-secs)" = 5
+
+# ---------------------------------------- conf files are never overwritten
+
+echo "--- conf files under /etc are never overwritten"
+
+new_sandbox
+run_install --target "$target" --sensor airlink -y > /dev/null 2>&1
+echo '# local tweak' >> "$etc/logrotate.d/airlink-proxy"
+echo '# local tweak' >> "$etc/rsyslog.d/airlink-proxy.conf"
+echo '# stale local copy' >> "$etc/logwatch/scripts/services/airlink-proxy"
+out=$(run_install --target "$target" -y 2>&1)
+check 'customized logrotate conf preserved' grep -q 'local tweak' "$etc/logrotate.d/airlink-proxy"
+check 'customized rsyslog conf preserved' grep -q 'local tweak' "$etc/rsyslog.d/airlink-proxy.conf"
+contains 'differing logrotate conf reported' "$out" 'Leaving existing file .*logrotate.d/airlink-proxy in place; it differs from the shipped version'
+contains 'differing rsyslog conf reported' "$out" 'Leaving existing file .*rsyslog.d/airlink-proxy.conf in place; it differs'
+contains 'unmodified conf also reported' "$out" 'Leaving existing file .*logwatch/conf/services/airlink-proxy.conf in place.$'
+lacks 'unmodified confs do not claim to differ' "$out" 'logwatch/conf.*differs'
+check 'shipped version written as .dpkg-new' cmp -s "$repo/etc/logrotate.d/airlink-proxy" "$etc/logrotate.d/airlink-proxy.dpkg-new"
+check_not 'no .dpkg-new for unmodified conf' test -e "$etc/logwatch/conf/services/airlink-proxy.conf.dpkg-new"
+check_not 'logwatch classifier refreshed (code, not conf)' grep -q 'stale local copy' "$etc/logwatch/scripts/services/airlink-proxy"
+
+# A stale .dpkg-new is overwritten on the next run, and removed once the
+# installed conf matches the shipped one again.
+echo '# stale new' >> "$etc/logrotate.d/airlink-proxy.dpkg-new"
+run_install --target "$target" -y > /dev/null 2>&1
+check '.dpkg-new overwritten, not accumulated' cmp -s "$repo/etc/logrotate.d/airlink-proxy" "$etc/logrotate.d/airlink-proxy.dpkg-new"
+cp "$repo/etc/logrotate.d/airlink-proxy" "$etc/logrotate.d/airlink-proxy"
+run_install --target "$target" -y > /dev/null 2>&1
+check '.dpkg-new removed once conf matches shipped' test ! -e "$etc/logrotate.d/airlink-proxy.dpkg-new"
+
+rm "$etc/logrotate.d/airlink-proxy"
+run_install --target "$target" -y > /dev/null 2>&1
+check 'missing conf reinstalled' test -f "$etc/logrotate.d/airlink-proxy"
+check 'reinstalled conf matches shipped' cmp -s "$repo/etc/logrotate.d/airlink-proxy" "$etc/logrotate.d/airlink-proxy"
+
+# ------------------------------------------------------------- symlinks
+
+echo "--- symlinks"
+
+new_sandbox
+mkdir -p "$tmp/checkout"
+cp "$repo/home/airlinkproxy/airlinkproxy.conf" "$tmp/checkout/airlinkproxy.conf"
+sum_before=$(cksum < "$tmp/checkout/airlinkproxy.conf")
+ln -s "$tmp/checkout/airlinkproxy.conf" "$target/airlinkproxy.conf"
+out=$(run_install --target "$target" --sensor other-sensor -y 2>&1)
+contains 'symlinked conf left in place' "$out" 'Leaving symlink .*airlinkproxy.conf in place'
+contains 'symlinked conf: flags warned-ignored' "$out" 'ignoring conf-related options'
+check 'conf still a symlink' test -L "$target/airlinkproxy.conf"
+check 'symlink target unmodified' test "$(cksum < "$tmp/checkout/airlinkproxy.conf")" = "$sum_before"
+# The symlinked-conf path never reads the settings, so database-file is empty.
+# dirname '' is '.', and chowning that would hand the source checkout the
+# installer was run from to the daemon user.
+check_not 'symlinked conf: never chowns the working directory' \
+  grep -qE '(^| )\.$' "$tmp/chown.log"
+
+
+cp "$repo/etc/rsyslog.d/airlink-proxy.conf" "$tmp/checkout/rsyslog.conf"
+cp "$repo/etc/logwatch/scripts/services/airlink-proxy" "$tmp/checkout/classifier"
+cp "$repo/home/airlinkproxy/bin/monitor/service.py" "$tmp/checkout/service.py"
+rm "$etc/rsyslog.d/airlink-proxy.conf" "$etc/logwatch/scripts/services/airlink-proxy" "$target/bin/monitor/service.py"
+ln -s "$tmp/checkout/rsyslog.conf" "$etc/rsyslog.d/airlink-proxy.conf"
+ln -s "$tmp/checkout/classifier" "$etc/logwatch/scripts/services/airlink-proxy"
+ln -s "$tmp/checkout/service.py" "$target/bin/monitor/service.py"
+out=$(run_install --target "$target" -y 2>&1)
+contains 'symlinked conf reported as symlink' "$out" 'Leaving symlink .*rsyslog.d/airlink-proxy.conf in place'
+contains 'symlinked classifier left in place' "$out" 'Leaving symlink .*logwatch/scripts/services/airlink-proxy in place'
+contains 'symlinked program file left in place' "$out" 'Leaving symlink .*service.py in place'
+check 'rsyslog conf still a symlink' test -L "$etc/rsyslog.d/airlink-proxy.conf"
+check 'classifier still a symlink' test -L "$etc/logwatch/scripts/services/airlink-proxy"
+check 'service.py still a symlink' test -L "$target/bin/monitor/service.py"
+
+# ------------------------------------ optional log tooling absent from /etc
+
+echo "--- rsyslog/logrotate/logwatch not installed"
+
+rm -rf "$etc" "$target" "$tmp/systemctl.state"
+mkdir -p "$etc/systemd/system" "$target"
+reset_log
+out=$(run_install --target "$target" --sensor airlink -y 2>&1)
+contains 'bare etc: install succeeds' "$out" 'installed and running'
+contains 'bare etc: rsyslog warning printed' "$out" 'rsyslog is not installed'
+check 'bare etc: unit installed' test -f "$etc/systemd/system/airlink-proxy.service"
+check 'bare etc: conf generated' test -f "$target/airlinkproxy.conf"
+check 'bare etc: rsyslog.d not created' test ! -d "$etc/rsyslog.d"
+check 'bare etc: logrotate.d not created' test ! -d "$etc/logrotate.d"
+check 'bare etc: logwatch not created' test ! -d "$etc/logwatch"
+out=$(run_install --uninstall "$target" 2>&1)
+contains 'bare etc: uninstall succeeds' "$out" 'left in place'
+
+# ---------------------------------------- restart only when something changed
+
+echo "--- service is started/restarted only as needed"
+
+new_sandbox
+run_install --target "$target" --sensor airlink -y > /dev/null 2>&1
+log=$(cat "$tmp/systemctl.log")
+contains 'fresh install starts the service' "$log" '^start airlink-proxy$'
+lacks 'fresh install does not restart' "$log" '^restart airlink-proxy$'
+lacks 'install never stops the daemon up front' "$log" '^stop airlink-proxy$'
+
+reset_log
+out=$(run_install --target "$target" -y 2>&1)
+log=$(cat "$tmp/systemctl.log")
+contains 'no-op rerun: conf reported unchanged' "$out" 'airlinkproxy.conf is unchanged'
+contains 'no-op rerun: daemon left alone (reported)' "$out" 'leaving the running daemon alone'
+lacks 'no-op rerun: no stop' "$log" '^stop airlink-proxy$'
+lacks 'no-op rerun: no start' "$log" '^start airlink-proxy$'
+lacks 'no-op rerun: no restart' "$log" '^restart airlink-proxy$'
+lacks 'no-op rerun: no rsyslog restart' "$log" '^restart rsyslog$'
+lacks 'no-op rerun: no daemon-reload' "$log" '^daemon-reload$'
+check 'no-op rerun leaves no .bak' test ! -e "$target/airlinkproxy.conf.bak"
+
+# A drifted program file is refreshed and triggers a restart.
+reset_log
+echo '# drift' >> "$target/bin/monitor/service.py"
+out=$(run_install --target "$target" -y 2>&1)
+contains 'program change: restart reported' "$out" 'Restarting airlink-proxy'
+contains 'program change: restart issued' "$(cat "$tmp/systemctl.log")" '^restart airlink-proxy$'
+check 'drifted program file refreshed' cmp -s "$repo/home/airlinkproxy/bin/monitor/service.py" "$target/bin/monitor/service.py"
+
+# A conf change (flag override on upgrade) triggers a restart.
+reset_log
+out=$(run_install --target "$target" --server-port 8005 -y 2>&1)
+contains 'conf change: rewrite reported' "$out" 'Rewriting'
+contains 'conf change: restart issued' "$(cat "$tmp/systemctl.log")" '^restart airlink-proxy$'
+
+# A drifted unit file is rewritten, reloaded and the service restarted.
+reset_log
+echo '# drift' >> "$etc/systemd/system/airlink-proxy.service"
+run_install --target "$target" -y > /dev/null 2>&1
+log=$(cat "$tmp/systemctl.log")
+contains 'unit change: daemon-reload issued' "$log" '^daemon-reload$'
+contains 'unit change: restart issued' "$log" '^restart airlink-proxy$'
+check_not 'drifted unit rewritten' grep -q '# drift' "$etc/systemd/system/airlink-proxy.service"
+
+# A stopped service is started even when nothing changed.
+reset_log
+rm -f "$tmp/systemctl.state"
+run_install --target "$target" -y > /dev/null 2>&1
+contains 'stopped service started on no-op run' "$(cat "$tmp/systemctl.log")" '^start airlink-proxy$'
+
+# ------------------------------------------------------------- uninstall
+
+echo "--- uninstall"
+
+new_sandbox
+run_install --target "$target" --sensor airlink -y > /dev/null 2>&1
+touch "$etc/logrotate.d/airlink-proxy.dpkg-new"
+out=$(run_install --uninstall "$target" 2>&1)
+contains 'uninstall reports what remains' "$out" 'left in place'
+check 'unit removed' test ! -e "$etc/systemd/system/airlink-proxy.service"
+check 'rsyslog conf removed' test ! -e "$etc/rsyslog.d/airlink-proxy.conf"
+check 'leftover .dpkg-new removed' test ! -e "$etc/logrotate.d/airlink-proxy.dpkg-new"
+check 'logrotate conf removed' test ! -e "$etc/logrotate.d/airlink-proxy"
+check 'logwatch script removed' test ! -e "$etc/logwatch/scripts/services/airlink-proxy"
+check 'conf left in place' test -f "$target/airlinkproxy.conf"
+check 'archive dir left in place' test -d "$target/archive"
+
+# --uninstall must not swallow a following option as its target dir.  (Uses
+# the default target, whose only real-filesystem touch is removing a
+# long-obsolete wrapper file — skip on a machine where that file exists.)
+if [ ! -e /home/airlinkproxy/bin/airlinkproxy-wrapper.sh ]; then
+  new_sandbox
+  run_install --target "$target" --sensor airlink -y > /dev/null 2>&1
+  out=$(run_install --uninstall -y 2>&1)
+  contains '--uninstall -y does not take -y as the target' "$out" 'left in place'
+else
+  echo "SKIP: --uninstall -y test (pre-4.0 wrapper present on this machine)"
+fi
+
+# --------------------------------------------------------------- summary
+
+echo
+echo "$passes passed, $failures failed"
+[ $failures -eq 0 ]

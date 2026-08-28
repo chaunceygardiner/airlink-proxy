@@ -1,0 +1,25 @@
+# Copyright (c) 2026 John A Kline
+# See the file LICENSE for your full rights.
+#
+# /home/airlinkproxy is replaced with the actual target directory at
+# install time (see the install script).
+
+[Unit]
+Description=Davis AirLink proxy daemon
+Documentation=https://github.com/chaunceygardiner/airlink-proxy
+Wants=network-online.target
+After=network-online.target rsyslog.service
+
+[Service]
+Type=exec
+User=airlinkproxy
+Group=airlinkproxy
+WorkingDirectory=/home/airlinkproxy/bin
+ExecStart=/usr/bin/python3 /home/airlinkproxy/bin/airlinkproxyd /home/airlinkproxy/airlinkproxy.conf
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
