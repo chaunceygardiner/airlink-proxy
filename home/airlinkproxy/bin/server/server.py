@@ -83,7 +83,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log.info('get-earliest-timestamp')
             self.respond_success(Database(db_file).get_earliest_timestamp_as_json())
         elif request.request_type == RequestType.FETCH_CURRENT_RECORD:
-            log.info('fetch-current-record')
+            log.info('v1/current_conditions')
             self.respond_success(Database(db_file).fetch_current_reading_as_json())
         elif request.request_type == RequestType.GET_ARCHIVE_INTERVAL:
             log.info('get-archive-interval-secs: %r' % archive_interval_secs)

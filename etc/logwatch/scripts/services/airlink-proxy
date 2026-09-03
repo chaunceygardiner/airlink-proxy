@@ -41,7 +41,7 @@ my $RETRIED_REQUESTS = 'Retried Sensor Requests';
 
 my $GET_VERSION             = 'get-version';
 my $GET_EARLIEST_TIMESTAMP  = 'get-earliest-timestamp';
-my $FETCH_CURRENT_RECORD    = 'fetch-current-record';
+my $FETCH_CURRENT_RECORD    = 'v1/current_conditions';
 my $FETCH_ARCHIVE_RECORDS   = 'fetch-archive-records';
 my $FETCH_TWO_MINUTE_RECORD = 'fetch-two-minute-record';
 my $GET_ARCHIVE_INTERVAL    = 'get-archive-interval-secs';
@@ -155,7 +155,7 @@ while(defined($_ = <STDIN>)) {
         $errors{$REQUEST_ERRORS} += 1;
     } elsif (/get-version: /) {
         $counts{$GET_VERSION} += 1;
-    } elsif (/fetch-current-record/) {
+    } elsif (/v1\/current_conditions/) {
         $counts{$FETCH_CURRENT_RECORD} += 1;
     } elsif (/get-archive-interval-secs/) {
         $counts{$GET_ARCHIVE_INTERVAL} += 1;
